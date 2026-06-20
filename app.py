@@ -1711,12 +1711,15 @@ st.success(
 📌 Hisse: {favorite['Hisse']}
 
 🤖 AI Skoru: {favorite['AI Skor']}
-
 📈 Rank Skoru: {favorite['Rank Skor']}
-
-🚀 Karar: {favorite['Karar']}
+💰 Finansal Skor: {favorite['Finansal Skor']}
+🚀 Yarın Skor: {favorite['Yarın Skor']}
 
 🎯 Potansiyel: %{favorite['Potansiyel %']}
+⚠️ Risk: %{favorite['Risk %']}
+
+📊 Karar: {favorite['Karar']}
+🔥 Fırsat: {favorite['Fırsat']}
 """
 )
 
