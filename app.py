@@ -2,6 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
+from kap_radar import get_kap_signals
 
 from ta.trend import EMAIndicator, MACD
 from ta.momentum import RSIIndicator
@@ -14,6 +15,93 @@ st.set_page_config(
     layout="wide"
 )
 
+@st.cache_data(ttl=604800)
+
+def get_financial_score(symbol):
+
+    print("FINANCIAL CHECKING:", symbol)
+
+    try:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info
+
+        print("INFO LENGTH:", len(info))
+        print(symbol)
+        print(info)
+
+        if not info:
+            return 50
+
+        print(symbol)
+        print("PE:", info.get("trailingPE"))
+        print("PB:", info.get("priceToBook"))
+        print("ROE:", info.get("returnOnEquity"))
+        print("REV:", info.get("revenueGrowth"))
+        print("MARGIN:", info.get("profitMargins"))
+        print("DEBT:", info.get("debtToEquity"))
+
+        pe = info.get("trailingPE")
+        pb = info.get("priceToBook")
+        debt = info.get("debtToEquity")
+
+        roe = info.get("returnOnEquity")
+        revenue_growth = info.get("revenueGrowth")
+        profit_margin = info.get("profitMargins")
+        current_ratio = info.get("currentRatio")
+
+        score = 20
+
+        if pe and pe < 10:
+            score += 15
+        elif pe and pe < 15:
+            score += 10
+        elif pe and pe < 20:
+            score += 5
+
+        if pb and pb < 1:
+            score += 15
+        elif pb and pb < 2:
+            score += 10
+        elif pb and pb < 3:
+            score += 5
+
+        if debt and debt < 50:
+            score += 15
+        elif debt and debt < 100:
+            score += 10
+        elif debt and debt < 150:
+            score += 5
+
+        if roe and roe > 0.20:
+            score += 15
+        elif roe and roe > 0.15:
+            score += 10
+        elif roe and roe > 0.10:
+            score += 5
+
+        if revenue_growth and revenue_growth > 0.20:
+            score += 10
+        elif revenue_growth and revenue_growth > 0.10:
+            score += 5
+
+        if profit_margin and profit_margin > 0.20:
+            score += 10
+        elif profit_margin and profit_margin > 0.10:
+            score += 5
+
+        if current_ratio and current_ratio > 2:
+            score += 10
+        elif current_ratio and current_ratio > 1.5:
+            score += 5
+
+        score = max(0, min(score, 100))
+        
+        return score
+
+    except Exception as e:
+        print("FINANCIAL ERROR:", symbol, e)
+        return 0
+
 def get_series(df, column):
 
     data = df[column]
@@ -25,7 +113,8 @@ def get_series(df, column):
 
     data = data.dropna()
 
-    return data
+    return data    
+
 
 BIST_LIST = [
 "AEFES.IS",
@@ -62,15 +151,36 @@ BIST_LIST = [
 ]
 
 st.sidebar.title("GainzAlgo V5")
+
 selected_symbol = st.sidebar.selectbox(
     "Hisse Seç",
     BIST_LIST
 )
 
+if st.sidebar.button("🔄 Verileri Güncelle"):
+    st.rerun()
+
 import json
 import os
 
 WATCHLIST_FILE = "watchlist.json"
+PORTFOLIO_FILE = "portfolio.json"
+
+if "portfolio" not in st.session_state:
+
+    if os.path.exists(PORTFOLIO_FILE):
+
+        with open(
+            PORTFOLIO_FILE,
+            "r",
+            encoding="utf-8"
+        ) as f:
+
+            st.session_state.portfolio = json.load(f)
+
+    else:
+
+        st.session_state.portfolio = []
 
 if os.path.exists(WATCHLIST_FILE):
     with open(WATCHLIST_FILE, "r", encoding="utf-8") as f:
@@ -78,7 +188,63 @@ if os.path.exists(WATCHLIST_FILE):
 else:
     st.session_state.watchlist = []
 
-if st.sidebar.button("⭐ Takibe Ekle"):
+col1, col2 = st.sidebar.columns(2)
+
+with col1:
+    takip_ekle = st.button("⭐ Takibe Ekle")
+
+with col2:
+    satin_al = st.button(
+        "💰 SATIN AL",
+        key="buy_button_top"
+    )
+
+if satin_al:
+
+    st.session_state.portfolio.append(
+        {
+            "symbol": selected_symbol,
+            "lot": st.session_state["lot_top"],
+            "alis": st.session_state["alis_top"]
+        }
+    )
+
+    with open(
+        PORTFOLIO_FILE,
+        "w",
+        encoding="utf-8"
+    ) as f:
+
+        json.dump(
+            st.session_state.portfolio,
+            f,
+            ensure_ascii=False,
+            indent=4
+        )
+
+    st.sidebar.success(
+        f"{selected_symbol} portföye eklendi"
+    )
+
+alis = st.sidebar.number_input(
+    "Alış Fiyatı",
+    min_value=0.01,
+    value=10.0,
+    key="alis_top"
+)
+
+st.sidebar.markdown("### 💰 Portföye Al")
+
+lot = st.sidebar.number_input(
+    "Lot",
+    min_value=1,
+    value=100,
+    key="lot_top"
+)
+
+st.sidebar.markdown("### 💰 Portföye Al")
+
+if takip_ekle:
 
     if selected_symbol not in st.session_state.watchlist:
 
@@ -86,11 +252,30 @@ if st.sidebar.button("⭐ Takibe Ekle"):
             selected_symbol
         )
 
-        with open(WATCHLIST_FILE, "w", encoding="utf-8") as f:
+        with open(
+            WATCHLIST_FILE,
+            "w",
+            encoding="utf-8"
+        ) as f:
+
             json.dump(
                 st.session_state.watchlist,
                 f,
-                ensure_ascii=False
+                ensure_ascii=False,
+                indent=4
+            )
+
+        with open(
+            WATCHLIST_FILE,
+            "w",
+            encoding="utf-8"
+        ) as f:
+
+            json.dump(
+                st.session_state.watchlist,
+                f,
+                ensure_ascii=False,
+                indent=4
             )
 
         st.sidebar.success(
@@ -108,7 +293,7 @@ st.sidebar.subheader("📌 Takip Listem")
 
 for hisse in st.session_state.watchlist:
 
-    col1, col2 = st.sidebar.columns([4,1])
+    col1, col2 = st.sidebar.columns([4, 1])
 
     col1.write(f"✅ {hisse}")
 
@@ -130,10 +315,277 @@ for hisse in st.session_state.watchlist:
             json.dump(
                 st.session_state.watchlist,
                 f,
-                ensure_ascii=False
+                ensure_ascii=False,
+                indent=4
             )
 
         st.rerun()
+st.divider()
+
+st.header("💼 Portföyüm")
+
+if "portfolio" not in st.session_state:
+
+    if os.path.exists("portfolio.json"):
+
+        with open(
+            "portfolio.json",
+            "r",
+            encoding="utf-8"
+        ) as f:
+
+            st.session_state.portfolio = json.load(f)
+
+    else:
+
+        st.session_state.portfolio = []
+
+    with open(
+        "portfolio.json",
+        "w",
+        encoding="utf-8"
+    ) as f:
+
+        json.dump(
+            st.session_state.portfolio,
+            f,
+            ensure_ascii=False,
+            indent=4
+        )
+
+    st.sidebar.success(
+        f"{selected_symbol} portföye eklendi"
+    )
+
+if len(st.session_state.portfolio) > 0:
+
+    rows = []
+
+    toplam_maliyet = 0
+    toplam_guncel = 0
+
+    en_iyi_hisse = ""
+    en_iyi_getiri = -999999
+
+    en_kotu_hisse = ""
+    en_kotu_getiri = 999999
+
+    kazanan_sayisi = 0
+    kaybeden_sayisi = 0
+
+    for item in st.session_state.portfolio:
+
+        try:
+
+            symbol = item["symbol"]
+
+            live = yf.download(
+                symbol,
+                period="5d",
+                progress=False
+            )
+
+            close_series = get_series(
+                live,
+                "Close"
+            )
+
+            if len(close_series) >= 1:
+
+                current_price = round(
+                    float(close_series.iloc[-1]),
+                    2
+                )
+
+            else:
+
+                current_price = 0
+
+            maliyet = (
+                item["lot"]
+                * item["alis"]
+            )
+
+            guncel_deger = (
+                item["lot"]
+                * current_price
+            )
+
+            toplam_maliyet += maliyet
+            toplam_guncel += guncel_deger
+
+            kar_zarar_yuzde = round(
+                (
+                    (
+                        current_price
+                        - item["alis"]
+                    )
+                    / item["alis"]
+                ) * 100,
+                2
+            )
+
+            kar_tl = round(
+                guncel_deger - maliyet,
+                2
+            )
+
+            if kar_tl > 0:
+
+                kar_tl_text = f"🟢 {kar_tl:,.2f} TL"
+
+            else:
+
+                kar_tl_text = f"🔴 {kar_tl:,.2f} TL"
+
+            if kar_zarar_yuzde > en_iyi_getiri:
+
+                en_iyi_getiri = kar_zarar_yuzde
+                en_iyi_hisse = symbol
+
+            if kar_zarar_yuzde < en_kotu_getiri:
+
+                en_kotu_getiri = kar_zarar_yuzde
+                en_kotu_hisse = symbol
+
+            if kar_zarar_yuzde > 0:
+
+                kazanan_sayisi += 1
+
+            elif kar_zarar_yuzde < 0:
+
+                kaybeden_sayisi += 1
+
+            rows.append(
+    {
+
+        "Hisse": symbol,
+        "Lot": item["lot"],
+        "Alış": item["alis"],
+        "Güncel": current_price,
+
+        "K/Z %":
+            f"🟢 %{kar_zarar_yuzde:.2f}"
+            if kar_zarar_yuzde > 0
+            else (
+                f"🔴 %{kar_zarar_yuzde:.2f}"
+                if kar_zarar_yuzde < 0
+                else "⚪ %0.00"
+            ),
+
+        "Kâr TL": kar_tl_text,
+
+        "Toplam": round(
+            guncel_deger,
+            2
+        )
+    }
+)
+
+        except:
+
+            pass
+
+        
+    kar_tutar = round(
+        toplam_guncel - toplam_maliyet,
+        2
+    )
+
+    basari_orani = round(
+        (
+            kazanan_sayisi
+            / len(st.session_state.portfolio)
+        ) * 100,
+        1
+    )
+
+    col1, col2, col3 = st.columns(3)
+
+    col1.metric(
+        "💰 Toplam Maliyet",
+        f"{toplam_maliyet:,.2f} TL"
+    )
+
+    col2.metric(
+        "📈 Güncel Değer",
+        f"{toplam_guncel:,.2f} TL"
+    )
+
+    col3.metric(
+        "🚀 Kâr / Zarar",
+        f"{kar_tutar:,.2f} TL"
+    )
+
+    col4, col5, col6 = st.columns(3)
+
+    col4.metric(
+        "🏆 En Karlı",
+        en_iyi_hisse
+    )
+
+    col5.metric(
+        "📉 En Zayıf",
+        en_kotu_hisse
+    )
+
+    col6.metric(
+        "🎯 Başarı",
+        f"%{basari_orani}"
+    )
+
+    st.info(
+    f"""
+    🟢 Kazanan: {kazanan_sayisi}
+
+    🔴 Kaybeden: {kaybeden_sayisi}
+
+    📊 Toplam Pozisyon: {len(st.session_state.portfolio)}
+    """    
+    )
+
+    if len(rows) > 0:
+
+        st.dataframe(
+            pd.DataFrame(rows),
+            use_container_width=True
+        )
+
+st.markdown("### 🗑️ Portföyden Sil")
+
+silinecek_hisse = st.selectbox(
+    "Silinecek Hisse",
+    [x["symbol"] for x in st.session_state.portfolio],
+    key="delete_portfolio_stock"
+)
+
+if st.button(
+    "❌ Portföyden Kaldır",
+    key="delete_portfolio_button"
+):
+
+    st.session_state.portfolio = [
+        x
+        for x in st.session_state.portfolio
+        if x["symbol"] != silinecek_hisse
+    ]
+
+    with open(
+        "portfolio.json",
+        "w",
+        encoding="utf-8"
+    ) as f:
+
+        json.dump(
+            st.session_state.portfolio,
+            f,
+            ensure_ascii=False,
+            indent=4
+        )
+
+    st.rerun()
+
+st.divider()
 
 show_watchlist = st.sidebar.button(
 "📊 Takip Listemi Göster"
@@ -152,11 +604,9 @@ from datetime import datetime
 now = datetime.now()
 
 st.info(
-    f"""
-🕒 Saat: {now.strftime('%H:%M:%S')}    |
-📅 Tarih: {now.strftime('%d.%m.%Y')}    |
-📈 Son Güncelleme: CANLI
-"""
+    f"Saat: {now.strftime('%H:%M:%S')} | "
+    f"Tarih: {now.strftime('%d.%m.%Y')} | "
+    f"Son Güncelleme: CANLI"
 )
 
 usd = yf.download(
@@ -167,18 +617,26 @@ usd = yf.download(
 
 usd_close = get_series(usd, "Close")
 
-usd_price = round(
-    float(usd_close.iloc[-1]),
-    2
-)
+if len(usd_close) >= 2:
 
-usd_change = round(
-    (
-        (usd_close.iloc[-1] /
-         usd_close.iloc[-2]) - 1
-    ) * 100,
-    2
-)
+    usd_price = round(
+        float(usd_close.iloc[-1]),
+        2
+    )
+
+    usd_change = round(
+        (
+            (usd_close.iloc[-1] /
+             usd_close.iloc[-2]) - 1
+        ) * 100,
+        2
+    )
+
+else:
+
+    usd_price = 0
+
+    usd_change = 0
 
 eur = yf.download(
     "EURTRY=X",
@@ -188,18 +646,25 @@ eur = yf.download(
 
 eur_close = get_series(eur, "Close")
 
-eur_price = round(
-    float(eur_close.iloc[-1]),
-    2
-)
+if len(eur_close) >= 2:
 
-eur_change = round(
-    (
-        (eur_close.iloc[-1] /
-         eur_close.iloc[-2]) - 1
-    ) * 100,
-    2
-)
+    eur_price = round(
+        float(eur_close.iloc[-1]),
+        2
+    )
+
+    eur_change = round(
+        (
+            (eur_close.iloc[-1] /
+             eur_close.iloc[-2]) - 1
+        ) * 100,
+        2
+    )
+
+else:
+
+    eur_price = 0
+    eur_change = 0
 gbp = yf.download(
     "GBPTRY=X",
     period="5d",
@@ -208,18 +673,25 @@ gbp = yf.download(
 
 gbp_close = get_series(gbp, "Close")
 
-gbp_price = round(
-    float(gbp_close.iloc[-1]),
-    2
-)
+if len(gbp_close) >= 2:
 
-gbp_change = round(
-    (
-        (gbp_close.iloc[-1] /
-         gbp_close.iloc[-2]) - 1
-    ) * 100,
-    2
-)
+    gbp_price = round(
+        float(gbp_close.iloc[-1]),
+        2
+    )
+
+    gbp_change = round(
+        (
+            (gbp_close.iloc[-1] /
+             gbp_close.iloc[-2]) - 1
+        ) * 100,
+        2
+    )
+
+else:
+
+    gbp_price = 0
+    gbp_change = 0
 
 gold = yf.download(
     "GC=F",
@@ -229,18 +701,25 @@ gold = yf.download(
 
 gold_close = get_series(gold, "Close")
 
-gold_price = round(
-    float(gold_close.iloc[-1]),
-    0
-)
+if len(gold_close) >= 2:
 
-gold_change = round(
-    (
-        (gold_close.iloc[-1] /
-         gold_close.iloc[-2]) - 1
-    ) * 100,
-    2
-)
+    gold_price = round(
+        float(gold_close.iloc[-1]),
+        2
+    )
+
+    gold_change = round(
+        (
+            (gold_close.iloc[-1] /
+             gold_close.iloc[-2]) - 1
+        ) * 100,
+        2
+    )
+
+else:
+
+    gold_price = 0
+    gold_change = 0
 
 silver = yf.download(
     "SI=F",
@@ -250,18 +729,25 @@ silver = yf.download(
 
 silver_close = get_series(silver, "Close")
 
-silver_price = round(
-    float(silver_close.iloc[-1]),
-    2
-)
+if len(silver_close) >= 2:
 
-silver_change = round(
-    (
-        (silver_close.iloc[-1] /
-         silver_close.iloc[-2]) - 1
-    ) * 100,
-    2
-)
+    silver_price = round(
+        float(silver_close.iloc[-1]),
+        2
+    )
+
+    silver_change = round(
+        (
+            (silver_close.iloc[-1] /
+             silver_close.iloc[-2]) - 1
+        ) * 100,
+        2
+    )
+
+else:
+
+    silver_price = 0
+    silver_change = 0
 
 btc = yf.download(
     "BTC-USD",
@@ -271,10 +757,25 @@ btc = yf.download(
 
 btc_close = get_series(btc, "Close")
 
-btc_price = round(
-    float(btc_close.iloc[-1]),
-    0
-)
+if len(btc_close) >= 2:
+
+    btc_price = round(
+        float(btc_close.iloc[-1]),
+        0
+    )
+
+    btc_change = round(
+        (
+            (btc_close.iloc[-1] /
+             btc_close.iloc[-2]) - 1
+        ) * 100,
+        2
+    )
+
+else:
+
+    btc_price = 0
+    btc_change = 0
 
 btc_change = round(
     (
@@ -382,9 +883,10 @@ if show_watchlist:
 
             volume = get_series(wdf, "Volume")
 
-            if len(close) < 60:
+            if len(close) < 20:
                 continue
 
+            
             ema20 = EMAIndicator(close, 20).ema_indicator()
             ema50 = EMAIndicator(close, 50).ema_indicator()
 
@@ -428,6 +930,26 @@ if show_watchlist:
             # Hacim
             if volume.iloc[-1] > avg_volume * 2:
                 big_money_score += 40
+
+            # AI Alarm Sistemi
+
+            if ai_score >= 80:
+
+                alerts.append(
+                f"🚨 {hisse} güçlü alım bölgesinde (AI: {ai_score})"
+                )
+
+            if volume.iloc[-1] > avg_volume * 2:
+
+                alerts.append(
+                f"💰 {hisse} büyük para girişi tespit edildi"
+                )
+
+            if last_rsi < 35:
+
+                alerts.append(
+                f"⚠️ {hisse} aşırı satım bölgesinde (RSI: {round(last_rsi,2)})"
+                )
 
             elif volume.iloc[-1] > avg_volume * 1.5:
                 big_money_score += 25
@@ -600,17 +1122,7 @@ if show_watchlist:
 
         favorite = watch_df.iloc[0]
 
-        st.success(
-            f"""
-        🏆 GÜNÜN FAVORİSİ
-
-        Hisse: {favorite['Hisse']}
-        AI Skor: {favorite['AI Skor']}
-        Sinyal: {favorite['Sinyal']}
-        Hedef: {favorite['Hedef']}
-        Potansiyel: %{favorite['Potansiyel %']}
-        """
-        )
+        st.success("Günün Favorisi Hazır")
 
         watch_df = watch_df[
             [
@@ -687,11 +1199,6 @@ for i, symbol in enumerate(BIST_LIST):
 
         if len(close) < 200:
             continue
-
-        close = get_series(df, "Close")
-        high = get_series(df, "High")
-        low = get_series(df, "Low")
-        volume = get_series(df, "Volume")
 
         ema20 = EMAIndicator(close, 20).ema_indicator()
         ema50 = EMAIndicator(close, 50).ema_indicator()
@@ -955,10 +1462,20 @@ for i, symbol in enumerate(BIST_LIST):
 
         score = min(score, 100)
 
+        # ATR Bazlı Hedef Hesabı
+
         target_price = last_close + (last_atr * 4)
 
+        # Çok güçlü hisselerde ekstra hedef
+
+        if score >= 85:
+            target_price += last_atr * 2
+
+        elif score >= 75:
+            target_price += last_atr * 1
+
         potential = (
-            (target_price / close.iloc[-1]) - 1
+        (target_price / last_close) - 1
         ) * 100
 
         # Negatif potansiyel cezası
@@ -1016,17 +1533,23 @@ for i, symbol in enumerate(BIST_LIST):
                 signal = "⛔ UZAK DUR"
                 action = "UZAK DUR"
 
+        financial_score = get_financial_score(symbol)
+
+        print("FINANCIAL SCORE:", symbol, financial_score)
+
         # Sıralama Skoru
 
         rank_score = (
-            score * 0.45 +
-            future_score * 0.20 +
-            potential * 0.35
+            score * 0.20 +
+            future_score * 0.15 +
+            financial_score * 0.75 +
+            relative_strength * 0.10 +
+            big_money_score * 0.10
         )
 
         # Risk cezası
 
-        rank_score -= risk_ratio * 2
+        rank_score -= risk_ratio * 1.2
 
         # Büyük para bonusu
 
@@ -1116,8 +1639,11 @@ for i, symbol in enumerate(BIST_LIST):
 
         trend_power = min(trend_power, 100)
 
+        print(symbol, financial_score)
+
         results.append({
             "Hisse": symbol,
+            "Finansal Skor": financial_score,
             "Dip Radarı": dip_radar,
             "🐋 Büyük Para": whale_signal,
             "Erken Uyarı": early_warning,
@@ -1158,6 +1684,15 @@ for i, symbol in enumerate(BIST_LIST):
 
 result_df = pd.DataFrame(results)
 
+top5_df = (
+    result_df
+    .sort_values(
+        by="Rank Skor",
+        ascending=False
+    )
+    .head(5)
+)
+
 if result_df.empty:
     st.error("Hiç hisse analiz edilemedi.")
     
@@ -1167,7 +1702,80 @@ result_df = result_df.sort_values(
         ascending=False
     )
 
+favorite = result_df.iloc[0]
 
+st.success(
+    f"""
+🏆 GÜNÜN FAVORUMUZ
+
+📌 Hisse: {favorite['Hisse']}
+
+🤖 AI Skoru: {favorite['AI Skor']}
+
+📈 Rank Skoru: {favorite['Rank Skor']}
+
+🚀 Karar: {favorite['Karar']}
+
+🎯 Potansiyel: %{favorite['Potansiyel %']}
+"""
+)
+
+if not result_df.empty:
+
+    st.header("🏆 BUGÜNÜN EN GÜÇLÜ 10 HİSSESİ")
+
+    top10 = (
+        result_df
+        .sort_values(
+            by="Rank Skor",
+            ascending=False
+        )
+        .head(10)
+    )
+
+    st.dataframe(
+        top10[
+            [
+                "Hisse",
+                "AI Skor",
+                "Rank Skor",
+                "Karar",
+                "Fırsat",
+                "Potansiyel %"
+            ]
+        ],
+        use_container_width=True
+    )
+
+    st.divider()
+
+st.header("🏆 Yarının En Güçlü 5 Hissesi")
+
+top5_show = top5_df[
+    [
+        "Hisse",
+        "Karar",
+        "Rank Skor",
+        "Yarın AL",
+        "Hedef",
+        "Potansiyel %",
+        "Risk %"
+    ]
+]
+
+st.dataframe(
+    top5_show,
+    use_container_width=True
+)
+
+st.divider()
+
+st.subheader("🏅 Günün En Güçlü Hisseleri")
+
+st.dataframe(
+    result_df,
+    use_container_width=True
+)
 
 st.subheader("🚨 Yaklaşan AL Sinyalleri")
 
@@ -1239,10 +1847,12 @@ else:
         "Şu an güçlü aday bulunamadı."
     )
 
-st.subheader("🏅 Günün En Güçlü Hisseleri")
+st.subheader("📢 KAP Radar")
+
+kap_df = get_kap_signals()
 
 st.dataframe(
-    result_df,
+    kap_df,
     use_container_width=True
 )
 
