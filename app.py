@@ -1,6 +1,8 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import json
+import os
 import plotly.graph_objects as go
 from kap_radar import get_kap_signals
 
@@ -113,7 +115,137 @@ def get_series(df, column):
 
     data = data.dropna()
 
-    return data    
+    return data 
+
+def update_backtest_results():
+
+    if not os.path.exists("backtest_history.csv"):
+        return
+
+    try:
+
+        df = pd.read_csv("backtest_history.csv")
+
+        for i in df.index:
+
+            try:
+
+                current_real = str(
+                    df.loc[i, "Gerçek Fiyat"]
+                )
+
+                if current_real != "nan":
+                    continue
+
+                symbol = df.loc[i, "Hisse"]
+
+                buy_price = float(
+                    df.loc[i, "Fiyat"]
+                )
+
+                live = yf.download(
+                    symbol,
+                    period="5d",
+                    progress=False
+                )
+
+                close_series = get_series(
+                    live,
+                    "Close"
+                )
+
+                if len(close_series) == 0:
+                    continue
+
+                current_price = round(
+                    float(close_series.iloc[-1]),
+                    2
+                )
+
+                getiri = round(
+                    (
+                        current_price - buy_price
+                    )
+                    / buy_price
+                    * 100,
+                    2
+                )
+
+                df.loc[i, "Gerçek Fiyat"] = current_price
+
+                df.loc[i, "Gerçek Getiri %"] = getiri
+
+                df.loc[i, "Başarılı"] = (
+                    "Evet"
+                    if getiri > 0
+                    else "Hayır"
+                )
+
+            except:
+                pass
+
+        df.to_csv(
+            "backtest_history.csv",
+            index=False
+        )
+
+    except Exception as e:
+
+        print(
+            "BACKTEST UPDATE ERROR:",
+            e
+        )
+
+BANKA_HISSELERI = [
+    "AKBNK.IS",
+    "GARAN.IS",
+    "HALKB.IS",
+    "ISCTR.IS",
+    "SKBNK.IS",
+    "TSKB.IS",
+    "VAKBN.IS",
+    "YKBNK.IS"
+]
+
+ENERJI_HISSELERI = [
+    "AKSEN.IS",
+    "ALFAS.IS",
+    "CWENE.IS",
+    "ENERY.IS",
+    "EUPWR.IS",
+    "GESAN.IS",
+    "ODAS.IS",
+    "SMRTG.IS"
+]
+
+SAVUNMA_HISSELERI = [
+    "ASELS.IS",
+    "OTKAR.IS",
+    "PAPIL.IS"
+]
+
+SANAYI_HISSELERI = [
+    "ARCLK.IS",
+    "EREGL.IS",
+    "KRDMD.IS",
+    "TOASO.IS",
+    "TTRAK.IS",
+    "FROTO.IS"
+]
+
+def get_best_stock_from_sector(df, sector_list):
+
+    temp = df[
+        df["Hisse"].isin(sector_list)
+    ]
+
+    if len(temp) == 0:
+        return None
+
+    return temp.sort_values(
+        "Sıra Skoru",
+        ascending=False
+    ).iloc[0]   
 
 
 BIST_LIST = [
@@ -152,10 +284,167 @@ BIST_LIST = [
 
 st.sidebar.title("GainzAlgo V5")
 
+page = st.sidebar.radio(
+    "Menü",
+    [
+        "Ana Ekran",
+        "Backtest Sonuçları"
+    ]
+)
+
 selected_symbol = st.sidebar.selectbox(
     "Hisse Seç",
     BIST_LIST
 )
+
+if page == "Backtest Sonuçları":
+
+    update_backtest_results()
+
+    st.title("📊 Backtest Sonuçları")
+
+    selected_date = st.date_input(
+        "Tarih Seç"
+    )
+    
+    try:
+
+        df_backtest = pd.read_csv(
+            "backtest_history.csv"
+        )
+
+        df_backtest["Tarih"] = pd.to_datetime(
+            df_backtest["Tarih"]
+        ).dt.date
+
+        df_backtest = df_backtest[
+            df_backtest["Tarih"] == selected_date
+        ]
+
+        if df_backtest.empty:
+            st.warning("Bu tarihe ait backtest kaydı bulunamadı.")
+            st.stop()
+
+        # İstatistikler
+
+        basarili = 0
+        basarisiz = 0
+        basari_orani = 0
+        ort_getiri = 0
+
+        if "Başarılı" in df_backtest.columns:
+
+            basarili = (
+                df_backtest["Başarılı"]
+                .astype(str)
+                .str.lower()
+                .isin(["evet", "true", "1"])
+                .sum()
+            )
+
+            basarisiz = (
+                df_backtest["Başarılı"]
+                .astype(str)
+                .str.lower()
+                .isin(["hayır", "hayir", "false", "0"])
+                .sum()
+            )
+
+            toplam_sonuc = basarili + basarisiz
+
+            if toplam_sonuc > 0:
+                basari_orani = round(
+                    basarili * 100 / toplam_sonuc,
+                    2
+                )
+
+        if "Gerçek Getiri %" in df_backtest.columns:
+
+            ort_getiri = round(
+                pd.to_numeric(
+                    df_backtest["Gerçek Getiri %"],
+                    errors="coerce"
+                ).mean(),
+                2
+            )
+
+            if pd.isna(ort_getiri):
+                ort_getiri = 0
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            st.metric(
+                "Toplam Kayıt",
+                len(df_backtest)
+            )
+
+        with col2:
+            st.metric(
+                "Başarı Oranı %",
+                basari_orani
+            )
+
+        with col3:
+            st.metric(
+                "Başarılı Tahmin",
+                basarili
+            )
+
+        with col4:
+            st.metric(
+                "Ortalama Getiri %",
+                ort_getiri
+            )
+
+        st.divider()
+
+        col5, col6, col7, col8 = st.columns(4)
+
+        with col5:
+            st.metric(
+                "Ortalama Potansiyel %",
+                round(
+                    df_backtest["Potansiyel %"].mean(),
+                    2
+                )
+            )
+
+        with col6:
+            st.metric(
+                "En Yüksek Potansiyel",
+                round(
+                    df_backtest["Potansiyel %"].max(),
+                    2
+                )
+            )
+
+        with col7:
+            st.metric(
+                "Başarısız Tahmin",
+                basarisiz
+            )
+
+        with col8:
+            st.metric(
+                "İlk Kayıt",
+                str(
+                    df_backtest["Tarih"].min()
+                )
+            )
+
+        st.dataframe(
+            df_backtest,
+            width="stretch"
+        )
+
+    except Exception as e:
+
+        st.error(
+            f"Backtest hatası: {e}"
+        )
+
+    st.stop()
 
 if st.sidebar.button("🔄 Verileri Güncelle"):
     st.rerun()
@@ -188,6 +477,41 @@ if os.path.exists(WATCHLIST_FILE):
 else:
     st.session_state.watchlist = []
 
+yatirim_tutari = st.sidebar.number_input(
+    "Yatırım Tutarı (TL)",
+    min_value=100,
+    value=20000,
+    step=1000
+)
+
+try:
+    fiyat_df = yf.download(
+        selected_symbol,
+        period="5d",
+        auto_adjust=True,
+        progress=False
+    )
+    
+    alis = round(
+        float(fiyat_df["Close"].squeeze().dropna().iloc[-1]),
+        2
+    )
+
+except Exception as e:
+    st.sidebar.error(str(e))
+    alis = 10.0
+
+st.sidebar.metric(
+    "Güncel Fiyat",
+    f"{alis} TL"
+)
+
+lot = int(yatirim_tutari / alis)
+
+st.sidebar.info(
+    f"📦 Otomatik Lot: {lot:,}"
+)
+
 col1, col2 = st.sidebar.columns(2)
 
 with col1:
@@ -204,8 +528,8 @@ if satin_al:
     st.session_state.portfolio.append(
         {
             "symbol": selected_symbol,
-            "lot": st.session_state["lot_top"],
-            "alis": st.session_state["alis_top"]
+            "lot": lot,
+            "alis": alis
         }
     )
 
@@ -225,24 +549,6 @@ if satin_al:
     st.sidebar.success(
         f"{selected_symbol} portföye eklendi"
     )
-
-alis = st.sidebar.number_input(
-    "Alış Fiyatı",
-    min_value=0.01,
-    value=10.0,
-    key="alis_top"
-)
-
-st.sidebar.markdown("### 💰 Portföye Al")
-
-lot = st.sidebar.number_input(
-    "Lot",
-    min_value=1,
-    value=100,
-    key="lot_top"
-)
-
-st.sidebar.markdown("### 💰 Portföye Al")
 
 if takip_ekle:
 
@@ -392,8 +698,13 @@ if len(st.session_state.portfolio) > 0:
 
             if len(close_series) >= 1:
 
+                son_fiyat = close_series.iloc[-1]
+
+                if hasattr(son_fiyat, "iloc"):
+                    son_fiyat = son_fiyat.iloc[0]
+
                 current_price = round(
-                    float(close_series.iloc[-1]),
+                    float(son_fiyat),
                     2
                 )
 
@@ -482,9 +793,11 @@ if len(st.session_state.portfolio) > 0:
     }
 )
 
-        except:
+        except Exception as e:
 
-            pass
+            st.error(
+                f"{symbol} HATA: {e}"
+            )
 
         
     kar_tutar = round(
@@ -591,6 +904,73 @@ show_watchlist = st.sidebar.button(
 "📊 Takip Listemi Göster"
 )
 
+show_glossary = st.sidebar.button(
+    "ℹ️ Skor Sözlüğü"
+)
+
+show_backtest = st.sidebar.button(
+    "📊 Geri Test Sonuçları"
+)
+
+if show_glossary:
+
+    st.title("ℹ️ GainzAlgo Skor Sözlüğü")
+
+    st.markdown("""
+    ## 🎯 Rank Skor
+    Tüm göstergelerin birleşiminden oluşan ana sıralama puanıdır.
+    Yüksek olması hissenin genel görünümünün güçlü olduğunu gösterir.
+
+    ## 🤖 AI Skor
+    Yapay zekâ modelinin teknik görünümden ürettiği puandır.
+    100'e yaklaştıkça olumlu görünüm artar.
+
+    ## 📊 Finansal Skor
+    Şirketin bilanço, kârlılık, büyüme ve borçluluk verilerinden hesaplanır.
+
+    ## 🚀 Yarın Skor
+    Hissenin kısa vadede yükselme ihtimalini gösteren momentum puanıdır.
+
+    ## 💰 Potansiyel %
+    Algoritmanın hesapladığı teorik yükseliş potansiyelidir.
+
+    ### Genel Yorum
+
+    - 80+ = Çok Güçlü
+    - 70-80 = Güçlü
+    - 60-70 = İzlenebilir
+    - 50-60 = Nötr
+    - 50 Altı = Zayıf
+    """)
+
+if show_backtest:
+
+    st.title("📊 Geri Test Sonuçları")
+
+    try:
+
+        df_backtest = pd.read_csv(
+            "backtest_history.csv"
+        )
+
+        st.metric(
+            "Toplam Kayıt",
+            len(df_backtest)
+        )
+
+        st.dataframe(
+            df_backtest,
+            use_container_width=True
+        )
+
+    except Exception as e:
+
+        st.error(
+            f"Geri test dosyası okunamadı: {e}"
+        )
+
+    st.stop()
+ 
 st.markdown(
     "## 🌍 CANLI PİYASALAR"
 )
@@ -1348,23 +1728,24 @@ for i, symbol in enumerate(BIST_LIST):
         if score < 35:
             future_score -= 20
 
-        future_score = min(future_score, score + 10)
+        future_score = min(future_score, 100)
 
         future_score = max(0, future_score)
 
         # Yarın AL Sinyali
 
         if (
-            future_score >= 80 and
+            future_score >= 75 and
             volume_ratio > 1.3 and
             ema20.iloc[-1] > ema50.iloc[-1]
+            and relative_strength > 0
         ):
             tomorrow_signal = "🚀 YARIN AL"
 
-        elif future_score >= 60:
+        elif future_score >= 55:
             tomorrow_signal = "🟢 YAKIN"
 
-        elif future_score >= 40:
+        elif future_score >= 35:
             tomorrow_signal = "👀 TAKİP"
 
         else:
@@ -1408,9 +1789,21 @@ for i, symbol in enumerate(BIST_LIST):
             (bist_close.iloc[-1] / bist_close.iloc[-20]) - 1
         ) * 100
 
+        if momentum20 > 10:
+            future_score += 10
+
+        elif momentum20 > 5:
+            future_score += 5
+
         relative_strength = (
             momentum20 - bist_momentum20
         )
+
+        if relative_strength > 10:
+            future_score += 10
+
+        elif relative_strength > 5:
+            future_score += 5
 
         if relative_strength > 20:
             rs_text = "🔥 ÇOK GÜÇLÜ"
@@ -1639,6 +2032,38 @@ for i, symbol in enumerate(BIST_LIST):
 
         trend_power = min(trend_power, 100)
 
+        # Hedefe Ulaşma Olasılığı
+
+        success_probability = (
+            score * 0.25 +
+            future_score * 0.25 +
+            financial_score * 0.15 +
+            big_money_score * 0.15 +
+            max(relative_strength, 0) * 0.10 +
+            trend_power * 0.10
+        )
+
+        success_probability -= risk_ratio * 3
+
+        if potential < 5:
+            success_probability -= 10
+
+        elif potential > 15:
+            success_probability += 5
+
+        success_probability = max(
+            5,
+            min(
+                round(success_probability, 2),
+                95
+            )
+        )
+
+        expected_return = round(
+            potential * success_probability / 100,
+            2
+        )
+
         print(symbol, financial_score)
 
         results.append({
@@ -1660,6 +2085,34 @@ for i, symbol in enumerate(BIST_LIST):
             "RS Güç": rs_text,
             "Trend Gücü": trend_power,
             "Yarın Skor": future_score,
+            "Patlama Skoru": min(
+                100,
+                round(
+                    (
+                        future_score * 0.45 +
+                        big_money_score * 0.35 +
+                        relative_strength * 0.20
+                    ),
+                    2
+                )
+            ),
+
+            "Hedefe Ulaşma Olasılığı (%)": success_probability,
+
+            "Beklenen Kazanç (%)": expected_return,
+
+            "Risk Ayarlı Skor": round(
+                min(
+                    100,
+                    (
+                        future_score * 0.45 +
+                        big_money_score * 0.35 +
+                        relative_strength * 0.20
+                    )
+                ) / max(float(risk_ratio), 1),
+                2
+            ),
+
             "Risk %": round(float(risk_ratio), 2),
 
         "Fırsat": (
@@ -1668,7 +2121,15 @@ for i, symbol in enumerate(BIST_LIST):
             "🟢 İYİ" if rank_score >= 45 else
             "👀 TAKİP"
         ),
-            "Rank Skor": round(rank_score, 2),
+
+        "Güven Notu": (
+            "A+" if rank_score >= 110 else
+            "A" if rank_score >= 95 else
+            "B+" if rank_score >= 90 else
+            "B" if rank_score >= 80 else
+            "C"
+        ),
+            "Sıra Skoru": round(rank_score, 2),
             })
 
     except Exception as e:
@@ -1687,22 +2148,71 @@ result_df = pd.DataFrame(results)
 top5_df = (
     result_df
     .sort_values(
-        by="Rank Skor",
+        by="Sıra Skoru",
         ascending=False
     )
     .head(5)
+    .reset_index(drop=True)
 )
 
 if result_df.empty:
     st.error("Hiç hisse analiz edilemedi.")
     
 
-result_df = result_df.sort_values(
-        "Rank Skor",
-        ascending=False
+result_df_favorite = result_df.sort_values(
+    "Beklenen Kazanç (%)",
+    ascending=False
+)
+
+favorite = result_df_favorite.iloc[0]
+
+today = pd.Timestamp.today().strftime("%Y-%m-%d")
+
+if not os.path.exists("favorite_history.csv"):
+    pd.DataFrame(columns=[
+        "Tarih",
+        "Hisse",
+        "Fiyat",
+        "Beklenen Kazanç (%)",
+        "Hedefe Ulaşma Olasılığı (%)",
+        "AI Skor",
+        "Yarın Skor"
+    ]).to_csv(
+        "favorite_history.csv",
+        index=False
     )
 
-favorite = result_df.iloc[0]
+history_df = pd.read_csv("favorite_history.csv")
+
+if (
+    history_df.empty
+    or today not in history_df["Tarih"].astype(str).values
+):
+
+    new_row = pd.DataFrame([{
+        "Tarih": today,
+        "Hisse": favorite["Hisse"],
+        "Fiyat": favorite["Fiyat"],
+        "Beklenen Kazanç (%)":
+            favorite["Beklenen Kazanç (%)"],
+        "Hedefe Ulaşma Olasılığı (%)":
+            favorite["Hedefe Ulaşma Olasılığı (%)"],
+        "AI Skor":
+            favorite["AI Skor"],
+        "Yarın Skor":
+            favorite["Yarın Skor"]
+    }])
+
+    history_df = pd.concat(
+        [history_df, new_row],
+        ignore_index=True
+    )
+
+    history_df.to_csv(
+        "favorite_history.csv",
+        index=False,
+        encoding="utf-8-sig"
+    )
 
 st.success(
     f"""
@@ -1711,10 +2221,16 @@ st.success(
 📌 Hisse: {favorite['Hisse']}
 
 🤖 AI Skoru: {favorite['AI Skor']}
-📈 Rank Skoru: {favorite['Rank Skor']}
+📈 Sıra Skoru: {favorite['Sıra Skoru']}
+🚀 Patlama Skoru: {favorite['Patlama Skoru']}
+🛡️ Güven Notu: {favorite['Güven Notu']}
 💰 Finansal Skor: {favorite['Finansal Skor']}
 🚀 Yarın Skor: {favorite['Yarın Skor']}
+📈 RS Gücü: {favorite['RS Güç']}
+🐋 Büyük Para: {favorite['🐋 Büyük Para']}
 
+💰 Beklenen Kazanç: %{favorite['Beklenen Kazanç (%)']}
+🎯 Hedefe Ulaşma: %{favorite['Hedefe Ulaşma Olasılığı (%)']}
 🎯 Potansiyel: %{favorite['Potansiyel %']}
 ⚠️ Risk: %{favorite['Risk %']}
 
@@ -1723,6 +2239,89 @@ st.success(
 """
 )
 
+st.subheader("📊 Favori Geçmişi")
+
+history_df = pd.read_csv("favorite_history.csv")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.metric(
+        "Toplam Favori",
+        len(history_df)
+    )
+
+with col2:
+    st.metric(
+        "Ort. Beklenen Kazanç (%)",
+        round(
+            history_df["Beklenen Kazanç (%)"].mean(),
+            2
+        )
+    )
+
+st.dataframe(
+    history_df.tail(10),
+    use_container_width=True
+)
+
+best_banka = get_best_stock_from_sector(
+result_df,
+BANKA_HISSELERI
+)
+
+best_enerji = get_best_stock_from_sector(
+result_df,
+ENERJI_HISSELERI
+)
+
+best_savunma = get_best_stock_from_sector(
+result_df,
+SAVUNMA_HISSELERI
+)
+
+best_sanayi = get_best_stock_from_sector(
+result_df,
+SANAYI_HISSELERI
+)
+
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    if best_banka is not None:
+        st.metric(
+            "🏦 En Güçlü Banka",
+            best_banka["Hisse"],
+            round(best_banka["Sıra Skoru"], 2)
+        )
+
+with col2:
+    if best_enerji is not None:
+        st.metric(
+            "⚡ En Güçlü Enerji",
+            best_enerji["Hisse"],
+            round(best_enerji["Sıra Skoru"], 2)
+        )
+
+with col3:
+    if best_savunma is not None:
+        st.metric(
+            "🛡️ En Güçlü Savunma",
+            best_savunma["Hisse"],
+            round(best_savunma["Sıra Skoru"], 2)
+        )
+
+with col4:
+    if best_sanayi is not None:
+        st.metric(
+            "🏭 En Güçlü Sanayi",
+            best_sanayi["Hisse"],
+            round(best_sanayi["Sıra Skoru"], 2)
+        )
+
+st.divider()
+
+
 if not result_df.empty:
 
     st.header("🏆 BUGÜNÜN EN GÜÇLÜ 10 HİSSESİ")
@@ -1730,35 +2329,102 @@ if not result_df.empty:
     top10 = (
         result_df
         .sort_values(
-            by="Rank Skor",
+            by="Sıra Skoru",
             ascending=False
         )
         .head(10)
+        .reset_index(drop=True)
     )
+
+    # BACKTEST KAYIT
+
+    try:
+
+        backtest_file = "backtest_history.csv"
+
+        save_df = top10.copy()
+        
+        save_df.columns = save_df.columns.str.strip()
+
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        save_df["Tarih"] = today
+
+        save_df["Gerçek Fiyat"] = None
+        save_df["Gerçek Getiri %"] = None
+        save_df["Başarılı"] = None
+
+        save_df = save_df.reindex(columns=[
+                "Tarih",
+                "Hisse",
+                "Fiyat",
+                "Sıra Skoru",
+                "AI Skor",
+                "Finansal Skor",
+                "Yarın Skor",
+                "Potansiyel %",
+                "Gerçek Fiyat",
+                "Gerçek Getiri %",
+                "Başarılı"
+        ])
+        
+        save_today = True
+
+        if os.path.exists(backtest_file):
+
+            old_df = pd.read_csv(backtest_file)
+
+            if (
+                "Tarih" in old_df.columns
+                and today in old_df["Tarih"].astype(str).values
+            ):
+                save_today = False
+
+        if save_today:
+
+            if os.path.exists(backtest_file):
+
+                save_df.to_csv(
+                    backtest_file,
+                    mode="a",
+                    header=False,
+                    index=False
+                )
+
+            else:
+
+                save_df.to_csv(
+                    backtest_file,
+                    index=False
+                )
+
+    except Exception as e:
+
+        st.warning(
+            f"Backtest kayıt hatası: {e}"
+        )
 
     st.dataframe(
-        top10[
-            [
-                "Hisse",
-                "AI Skor",
-                "Rank Skor",
-                "Karar",
-                "Fırsat",
-                "Potansiyel %"
-            ]
-        ],
-        use_container_width=True
-    )
-
-    st.divider()
-
+    top10[
+        [
+            "Hisse",
+            "AI Skor",
+            "Karar",
+            "Potansiyel %",
+            "Risk %",
+            "Güven Notu",
+            "Sıra Skoru"
+        ]
+    ],
+    use_container_width=True
+)
 st.header("🏆 Yarının En Güçlü 5 Hissesi")
 
 top5_show = top5_df[
     [
         "Hisse",
         "Karar",
-        "Rank Skor",
+        "Sıra Skoru",
         "Yarın AL",
         "Hedef",
         "Potansiyel %",
@@ -1821,16 +2487,8 @@ else:
 st.subheader("🔮 Yarın AL Verebilecek Hisseler")
 
 future_df = result_df[
-    (
-        result_df["Yarın AL"].isin(
-            ["🚀 YARIN AL", "🟢 YAKIN"]
-        )
-    )
-    &
-    (
-        result_df["Karar"].isin(
-            ["AL"]
-        )
+    result_df["Yarın AL"].isin(
+        ["🚀 YARIN AL", "🟢 YAKIN"]
     )
 ]
 
@@ -1858,6 +2516,33 @@ st.dataframe(
     kap_df,
     use_container_width=True
 )
+
+st.subheader("🚀 Bugünün En Güçlü 5 Adayı")
+
+top5_df = result_df.sort_values(
+    "Risk Ayarlı Skor",
+    ascending=False
+)
+
+st.dataframe(
+    top5_df[
+        [
+            "Hisse",
+            "Beklenen Kazanç (%)",
+            "Hedefe Ulaşma Olasılığı (%)",
+            "Risk Ayarlı Skor",
+            "Patlama Skoru",
+            "AI Skor",
+            "Yarın Skor",
+            "Karar",
+            "Potansiyel %",
+            "Risk %"
+        ]
+    ].head(5),
+    use_container_width=True
+)
+
+st.divider()
 
 st.subheader("🔥 Top 10")
 
