@@ -1,459 +1,308 @@
 import streamlit as st
 import yfinance as yf
+
 import pandas as pd
 import json
 import os
 import plotly.graph_objects as go
 from kap_radar import get_kap_signals
 
+
 from ta.trend import EMAIndicator, MACD
 from ta.momentum import RSIIndicator
 from ta.volatility import AverageTrueRange
 
 from datetime import datetime
+from modules.ai_panel import show_ai_panel
+from modules.stock_analysis import show_stock_analysis_header
+from modules.ai_prefilter import passes_ai_prefilter
+from modules.accuracy_update import update_accuracy_history
+from modules.stock_analysis_page import show_stock_analysis_page
+from modules.analysis_engine import analyze_stock
+from modules.dashboard_market import show_market_panel
+from modules.dashboard_data import get_dashboard_data
+
+from modules.portfolio_page import show_portfolio_page
+from modules.scanner_page import show_scanner_page
+from modules.backtest_page import show_backtest_page
+from modules.favorite_page import show_favorite_page
+from modules.live_market_page import show_live_market_page
+from modules.portfolio_page import show_portfolio_page
+from modules.scanner_top10 import prepare_scanner_lists, prepare_dashboard_data
+from modules.scanner_tomorrow import prepare_tomorrow_table
+
+from modules.stock_analysis_page import show_stock_analysis_page
+
+
+from modules.dashboard import (
+    show_dashboard,
+    show_dashboard_header,
+    show_dashboard_style,
+)
+
+from modules.session import (
+    get_result_df,
+    has_result_df,
+    set_result_df,
+)
+
+import modules.market_data as market
+
+from modules.scoring import (
+    calculate_financial_score,
+    calculate_rank_score,
+    calculate_trend_power,
+    calculate_success_probability,
+    calculate_expected_return,
+    calculate_risk_adjusted_score,
+)
+
+from modules.paths import (
+    PORTFOLIO_FILE,
+    WATCHLIST_FILE,
+    BACKTEST_FILE,
+    FAVORITE_FILE,
+)
+
+from modules.utils import get_series
+
+from modules.ai_engine import calculate_ai_engine
+
+from modules.decision_engine import calculate_decision
+
+from modules.ai_core import evaluate_stock
+
+from modules.learning_engine import get_learning_bonus
+
+from modules.constants import (
+    BANKA_HISSELERI,
+    ENERJI_HISSELERI,
+    SAVUNMA_HISSELERI,
+    SANAYI_HISSELERI,
+)
+
+from modules.portfolio import (
+    load_portfolio,
+    save_portfolio,
+    load_watchlist,
+    save_watchlist,
+)
+
+from modules.sectors import get_best_stock_from_sector
+
+from modules.backtest import update_backtest_results
+
+from modules.data_manager import (
+    get_selected_stock_data,
+)
+
+from modules.technical import (
+    get_stock_data,
+    calculate_emas,
+    calculate_rsi,
+)
+
+from modules.signals import (
+    initialize_signals,
+    calculate_trend_score,
+    calculate_early_warning,
+    calculate_rsi_score,
+    calculate_macd_score,
+    calculate_big_money_score,
+    calculate_future_score,
+    calculate_whale_signal,
+    calculate_money_flow,
+    calculate_relative_strength,
+)
 
 st.set_page_config(
     page_title="GainzAlgo V5 Professional",
     layout="wide"
 )
 
-@st.cache_data(ttl=604800)
-
-def get_financial_score(symbol):
-
-    print("FINANCIAL CHECKING:", symbol)
-
-    try:
-        ticker = yf.Ticker(symbol)
-        info = ticker.info
-
-        print("INFO LENGTH:", len(info))
-        print(symbol)
-        print(info)
-
-        if not info:
-            return 50
-
-        print(symbol)
-        print("PE:", info.get("trailingPE"))
-        print("PB:", info.get("priceToBook"))
-        print("ROE:", info.get("returnOnEquity"))
-        print("REV:", info.get("revenueGrowth"))
-        print("MARGIN:", info.get("profitMargins"))
-        print("DEBT:", info.get("debtToEquity"))
-
-        pe = info.get("trailingPE")
-        pb = info.get("priceToBook")
-        debt = info.get("debtToEquity")
-
-        roe = info.get("returnOnEquity")
-        revenue_growth = info.get("revenueGrowth")
-        profit_margin = info.get("profitMargins")
-        current_ratio = info.get("currentRatio")
-
-        score = 20
-
-        if pe and pe < 10:
-            score += 15
-        elif pe and pe < 15:
-            score += 10
-        elif pe and pe < 20:
-            score += 5
-
-        if pb and pb < 1:
-            score += 15
-        elif pb and pb < 2:
-            score += 10
-        elif pb and pb < 3:
-            score += 5
-
-        if debt and debt < 50:
-            score += 15
-        elif debt and debt < 100:
-            score += 10
-        elif debt and debt < 150:
-            score += 5
-
-        if roe and roe > 0.20:
-            score += 15
-        elif roe and roe > 0.15:
-            score += 10
-        elif roe and roe > 0.10:
-            score += 5
-
-        if revenue_growth and revenue_growth > 0.20:
-            score += 10
-        elif revenue_growth and revenue_growth > 0.10:
-            score += 5
-
-        if profit_margin and profit_margin > 0.20:
-            score += 10
-        elif profit_margin and profit_margin > 0.10:
-            score += 5
-
-        if current_ratio and current_ratio > 2:
-            score += 10
-        elif current_ratio and current_ratio > 1.5:
-            score += 5
-
-        score = max(0, min(score, 100))
-        
-        return score
-
-    except Exception as e:
-        print("FINANCIAL ERROR:", symbol, e)
-        return 0
-
-def get_series(df, column):
-
-    data = df[column]
-
-    if isinstance(data, pd.DataFrame):
-        data = data.iloc[:, 0]
-
-    data = pd.to_numeric(data, errors="coerce")
-
-    data = data.dropna()
-
-    return data 
-
-def update_backtest_results():
-
-    if not os.path.exists("backtest_history.csv"):
-        return
-
-    try:
-
-        df = pd.read_csv("backtest_history.csv")
-
-        for i in df.index:
-
-            try:
-
-                current_real = str(
-                    df.loc[i, "Gerçek Fiyat"]
-                )
-
-                if current_real != "nan":
-                    continue
-
-                symbol = df.loc[i, "Hisse"]
-
-                buy_price = float(
-                    df.loc[i, "Fiyat"]
-                )
-
-                live = yf.download(
-                    symbol,
-                    period="5d",
-                    progress=False
-                )
-
-                close_series = get_series(
-                    live,
-                    "Close"
-                )
-
-                if len(close_series) == 0:
-                    continue
-
-                current_price = round(
-                    float(close_series.iloc[-1]),
-                    2
-                )
-
-                getiri = round(
-                    (
-                        current_price - buy_price
-                    )
-                    / buy_price
-                    * 100,
-                    2
-                )
-
-                df.loc[i, "Gerçek Fiyat"] = current_price
-
-                df.loc[i, "Gerçek Getiri %"] = getiri
-
-                df.loc[i, "Başarılı"] = (
-                    "Evet"
-                    if getiri > 0
-                    else "Hayır"
-                )
-
-            except:
-                pass
-
-        df.to_csv(
-            "backtest_history.csv",
-            index=False
-        )
-
-    except Exception as e:
-
-        print(
-            "BACKTEST UPDATE ERROR:",
-            e
-        )
-
-BANKA_HISSELERI = [
-    "AKBNK.IS",
-    "GARAN.IS",
-    "HALKB.IS",
-    "ISCTR.IS",
-    "SKBNK.IS",
-    "TSKB.IS",
-    "VAKBN.IS",
-    "YKBNK.IS"
-]
-
-ENERJI_HISSELERI = [
-    "AKSEN.IS",
-    "ALFAS.IS",
-    "CWENE.IS",
-    "ENERY.IS",
-    "EUPWR.IS",
-    "GESAN.IS",
-    "ODAS.IS",
-    "SMRTG.IS"
-]
-
-SAVUNMA_HISSELERI = [
-    "ASELS.IS",
-    "OTKAR.IS",
-    "PAPIL.IS"
-]
-
-SANAYI_HISSELERI = [
-    "ARCLK.IS",
-    "EREGL.IS",
-    "KRDMD.IS",
-    "TOASO.IS",
-    "TTRAK.IS",
-    "FROTO.IS"
-]
-
-def get_best_stock_from_sector(df, sector_list):
-
-    temp = df[
-        df["Hisse"].isin(sector_list)
-    ]
-
-    if len(temp) == 0:
-        return None
-
-    return temp.sort_values(
-        "Sıra Skoru",
-        ascending=False
-    ).iloc[0]   
-
-
-BIST_LIST = [
-"AEFES.IS",
-"AGHOL.IS",
-"AKBNK.IS",
-"AKFGY.IS",
-"AKFYE.IS",
-"AKSA.IS",
-"AKSEN.IS",
-"ALARK.IS",
-"ALFAS.IS",
-"ARCLK.IS",
-"ASELS.IS",
-"ASTOR.IS",
-"BERA.IS",
-"BIMAS.IS",
-"BRSAN.IS",
-"CCOLA.IS",
-"CIMSA.IS",
-"CWENE.IS",
-"DOAS.IS","DOHOL.IS",
-"ECILC.IS","ECZYT.IS","EGEEN.IS","EKGYO.IS","ENERY.IS",
-"ENJSA.IS","ENKAI.IS","EREGL.IS","EUPWR.IS","FROTO.IS",
-"GARAN.IS","GESAN.IS","GUBRF.IS","GWIND.IS","HALKB.IS",
-"HEKTS.IS","ISCTR.IS","ISMEN.IS","KCAER.IS","KCHOL.IS",
-"KLSER.IS","KONTR.IS","KOZAA.IS","KOZAL.IS","KRDMD.IS",
-"MAVI.IS","MGROS.IS","MIATK.IS","ODAS.IS","OTKAR.IS",
-"OYAKC.IS","PGSUS.IS","PETKM.IS","QUAGR.IS","REEDR.IS",
-"SASA.IS","SAHOL.IS","SDTTR.IS","SISE.IS","SKBNK.IS",
-"SMRTG.IS","SOKM.IS","TABGD.IS","TAVHL.IS","TCELL.IS",
-"THYAO.IS","TKFEN.IS","TOASO.IS","TSKB.IS","TTKOM.IS",
-"TTRAK.IS","TUKAS.IS","TUPRS.IS","ULKER.IS","VAKBN.IS",
-"VESBE.IS","VESTL.IS","YEOTK.IS","YKBNK.IS","ZOREN.IS"
-]
+from modules.constants import BIST_LIST
 
 st.sidebar.title("GainzAlgo V5")
+
+PAGE_DASHBOARD = "🏠 Dashboard"
+PAGE_ANALYSIS = "📈 Hisse Analizi"
+PAGE_PORTFOLIO = "⭐ AI Sepeti"
+PAGE_SCANNER = "🔍 AI Tarayıcı"
+PAGE_BACKTEST = "📊 Backtest Sonuçları"
 
 page = st.sidebar.radio(
     "Menü",
     [
-        "Ana Ekran",
-        "Backtest Sonuçları"
+        PAGE_DASHBOARD,
+        PAGE_ANALYSIS,
+        PAGE_PORTFOLIO,
+        PAGE_SCANNER,
+        PAGE_BACKTEST,
     ]
 )
+
+
+st.sidebar.write("Toplam Hisse:", len(BIST_LIST))
 
 selected_symbol = st.sidebar.selectbox(
     "Hisse Seç",
     BIST_LIST
 )
 
-if page == "Backtest Sonuçları":
+# =====================================================
+# ANA EKRAN
+# =====================================================
 
-    update_backtest_results()
+if False:
 
-    st.title("📊 Backtest Sonuçları")
+    dashboard_data = st.session_state.get("dashboard_data", {})
 
-    selected_date = st.date_input(
-        "Tarih Seç"
+    show_dashboard(
+        dashboard_data=dashboard_data,
+        selected_symbol=selected_symbol,
     )
-    
-    try:
+        
+    bist_price, bist_change = market.get_bist100()
+    eur_price, eur_change = market.get_eurtry()
+    gold_price, gold_change = market.get_gold()
+    usd_price, usd_change = market.get_usdtry()
+    btc_price, btc_change = market.get_bitcoin()
 
-        df_backtest = pd.read_csv(
-            "backtest_history.csv"
-        )
+    st.write(st.session_state.get("dashboard_data"))
+        
+        
+# =====================================================
+# Dashboard Yakında Aktif Olacak Modüller
+# =====================================================
 
-        df_backtest["Tarih"] = pd.to_datetime(
-            df_backtest["Tarih"]
-        ).dt.date
 
-        df_backtest = df_backtest[
-            df_backtest["Tarih"] == selected_date
-        ]
 
-        if df_backtest.empty:
-            st.warning("Bu tarihe ait backtest kaydı bulunamadı.")
-            st.stop()
 
-        # İstatistikler
 
-        basarili = 0
-        basarisiz = 0
-        basari_orani = 0
-        ort_getiri = 0
 
-        if "Başarılı" in df_backtest.columns:
+# =====================================================
+# PORTFOLIO
+# =====================================================
 
-            basarili = (
-                df_backtest["Başarılı"]
-                .astype(str)
-                .str.lower()
-                .isin(["evet", "true", "1"])
-                .sum()
+if page == "⭐ AI Sepeti":
+    show_portfolio_page()
+
+# =====================================================
+# 🔍 AI TARAMA MERKEZİ
+# =====================================================
+
+if page == "🔍 AI Tarayıcı":
+
+    st.title("🔍 AI Tarama Merkezi")
+
+    st.markdown("### 📊 AI Tarama Listeleri")
+
+    # =====================================================
+    # Bugünün En Güçlü 10 Hissesi
+    # =====================================================
+
+    with st.expander("🏆 Bugünün En Güçlü 10 Hissesi", expanded=True):
+
+        if "top10_df" in st.session_state:
+
+            st.dataframe(
+                st.session_state["top10_df"],
+                use_container_width=True
             )
 
-            basarisiz = (
-                df_backtest["Başarılı"]
-                .astype(str)
-                .str.lower()
-                .isin(["hayır", "hayir", "false", "0"])
-                .sum()
+    # =====================================================
+    # 🔮 Yarının En Güçlü 5 Hissesi
+    # =====================================================
+
+    with st.expander("🔮 Yarının En Güçlü 5 Hissesi"):
+
+        if "tomorrow_df" in st.session_state:
+
+            st.dataframe(
+                st.session_state["tomorrow_df"][
+                    [
+                        "Hisse",
+                        "Karar",
+                        "AI Puanı",
+                        "AI Güven",
+                        "Trend Gücü",
+                        "Yarın AL",
+                        "Dip Radarı",
+                        "🐋 Büyük Para",
+                        "Hedef",
+                        "Potansiyel %",
+                    ]
+                ],
+                use_container_width=True,
+                hide_index=True,
             )
 
-            toplam_sonuc = basarili + basarisiz
+    # =====================================================
+    # Yaklaşan AL Sinyalleri
+    # =====================================================
 
-            if toplam_sonuc > 0:
-                basari_orani = round(
-                    basarili * 100 / toplam_sonuc,
-                    2
+    with st.expander("🚨 Yaklaşan AL Sinyalleri"):
+
+        if "result_df" in st.session_state:
+
+            st.write(
+                st.session_state["result_df"][["Hisse", "Yarın AL"]]
+            )
+
+    # =====================================================
+    # Dip Radarı
+    # =====================================================
+
+    with st.expander("🎯 Dip Radarı"):
+
+        if "result_df" in st.session_state:
+
+            dip_df = (
+                st.session_state["result_df"]
+                .loc[
+                    st.session_state["result_df"]["Dip Radarı"] == "🚀 YAKIN AL"
+                ]
+            )
+
+            if dip_df.empty:
+                st.info("Dip Radarı adayı bulunamadı.")
+            else:
+                st.dataframe(
+                    dip_df,
+                    use_container_width=True
                 )
 
-        if "Gerçek Getiri %" in df_backtest.columns:
+    # =====================================================
+    # KAP Radar
+    # =====================================================
 
-            ort_getiri = round(
-                pd.to_numeric(
-                    df_backtest["Gerçek Getiri %"],
-                    errors="coerce"
-                ).mean(),
-                2
+    with st.expander("📢 KAP Radar"):
+
+        kap_df = get_kap_signals()
+
+        if kap_df.empty:
+            st.info("Bugün önemli KAP bildirimi bulunamadı.")
+        else:
+            st.dataframe(
+                kap_df,
+                use_container_width=True
             )
 
-            if pd.isna(ort_getiri):
-                ort_getiri = 0
+    # =====================================================
+    # Tüm Hisseler
+    # =====================================================
 
-        col1, col2, col3, col4 = st.columns(4)
+    with st.expander("📊 Tüm Hisseler"):
 
-        with col1:
-            st.metric(
-                "Toplam Kayıt",
-                len(df_backtest)
+        if "result_df" in st.session_state:
+
+            st.dataframe(
+                st.session_state["result_df"],
+                use_container_width=True
             )
-
-        with col2:
-            st.metric(
-                "Başarı Oranı %",
-                basari_orani
-            )
-
-        with col3:
-            st.metric(
-                "Başarılı Tahmin",
-                basarili
-            )
-
-        with col4:
-            st.metric(
-                "Ortalama Getiri %",
-                ort_getiri
-            )
-
-        st.divider()
-
-        col5, col6, col7, col8 = st.columns(4)
-
-        with col5:
-            st.metric(
-                "Ortalama Potansiyel %",
-                round(
-                    df_backtest["Potansiyel %"].mean(),
-                    2
-                )
-            )
-
-        with col6:
-            st.metric(
-                "En Yüksek Potansiyel",
-                round(
-                    df_backtest["Potansiyel %"].max(),
-                    2
-                )
-            )
-
-        with col7:
-            st.metric(
-                "Başarısız Tahmin",
-                basarisiz
-            )
-
-        with col8:
-            st.metric(
-                "İlk Kayıt",
-                str(
-                    df_backtest["Tarih"].min()
-                )
-            )
-
-        st.dataframe(
-            df_backtest,
-            width="stretch"
-        )
-
-    except Exception as e:
-
-        st.error(
-            f"Backtest hatası: {e}"
-        )
-
-    st.stop()
 
 if st.sidebar.button("🔄 Verileri Güncelle"):
     st.rerun()
-
-import json
-import os
-
-WATCHLIST_FILE = "watchlist.json"
-PORTFOLIO_FILE = "portfolio.json"
 
 if "portfolio" not in st.session_state:
 
@@ -471,11 +320,7 @@ if "portfolio" not in st.session_state:
 
         st.session_state.portfolio = []
 
-if os.path.exists(WATCHLIST_FILE):
-    with open(WATCHLIST_FILE, "r", encoding="utf-8") as f:
-        st.session_state.watchlist = json.load(f)
-else:
-    st.session_state.watchlist = []
+st.session_state.watchlist = load_watchlist()
 
 yatirim_tutari = st.sidebar.number_input(
     "Yatırım Tutarı (TL)",
@@ -488,14 +333,32 @@ try:
     fiyat_df = yf.download(
         selected_symbol,
         period="5d",
-        auto_adjust=True,
+        auto_adjust=False,
         progress=False
     )
-    
-    alis = round(
-        float(fiyat_df["Close"].squeeze().dropna().iloc[-1]),
-        2
+
+    # st.dataframe(fiyat_df.tail())
+
+    close_series = (
+        fiyat_df["Close"]
+        .squeeze()
     )
+
+    open_series = (
+        fiyat_df["Open"]
+        .squeeze()
+    )
+
+    if pd.notna(close_series.iloc[-1]):
+        alis = round(
+            float(close_series.iloc[-1]),
+            2
+        )
+    else:
+        alis = round(
+            float(open_series.iloc[-1]),
+            2
+        )
 
 except Exception as e:
     st.sidebar.error(str(e))
@@ -533,18 +396,7 @@ if satin_al:
         }
     )
 
-    with open(
-        PORTFOLIO_FILE,
-        "w",
-        encoding="utf-8"
-    ) as f:
-
-        json.dump(
-            st.session_state.portfolio,
-            f,
-            ensure_ascii=False,
-            indent=4
-        )
+    save_portfolio(st.session_state.portfolio)
 
     st.sidebar.success(
         f"{selected_symbol} portföye eklendi"
@@ -558,18 +410,7 @@ if takip_ekle:
             selected_symbol
         )
 
-        with open(
-            WATCHLIST_FILE,
-            "w",
-            encoding="utf-8"
-        ) as f:
-
-            json.dump(
-                st.session_state.watchlist,
-                f,
-                ensure_ascii=False,
-                indent=4
-            )
+        save_watchlist(st.session_state.watchlist)
 
         with open(
             WATCHLIST_FILE,
@@ -588,84 +429,87 @@ if takip_ekle:
             f"{selected_symbol} takip listesine eklendi"
         )
 
+        # -------------------------
+        # Data Manager Test
+        # -------------------------
+
+        result_df = st.session_state.get("result_df")
+
+        selected_stock = get_selected_stock_data(
+            result_df,
+            selected_symbol
+        )
+
+        if selected_stock is not None:
+
+            st.write(selected_stock.index.tolist())
+
+            st.sidebar.info(
+                f"AI Skor: {selected_stock['AI Skor']}"
+            )
+
     else:
 
         st.sidebar.warning(
             "Bu hisse zaten takip listesinde"
         )
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("📌 Takip Listem")
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📌 Takip Listem")
 
-for hisse in st.session_state.watchlist:
+    for hisse in st.session_state.watchlist:
 
-    col1, col2 = st.sidebar.columns([4, 1])
+        col1, col2 = st.sidebar.columns([4, 1])
 
-    col1.write(f"✅ {hisse}")
+        col1.write(f"✅ {hisse}")
 
-    if col2.button(
-        "❌",
-        key=f"delete_{hisse}"
-    ):
+        if col2.button(
+            "❌",
+            key=f"delete_{hisse}"
+        ):
 
-        st.session_state.watchlist.remove(
-            hisse
-        )
-
-        with open(
-            WATCHLIST_FILE,
-            "w",
-            encoding="utf-8"
-        ) as f:
-
-            json.dump(
-                st.session_state.watchlist,
-                f,
-                ensure_ascii=False,
-                indent=4
+            st.session_state.watchlist.remove(
+                hisse
             )
 
+            save_watchlist(st.session_state.watchlist)
+
+            st.rerun()
+
+        del st.session_state.watchlist[i]
+
+        save_watchlist(st.session_state.watchlist)
+
         st.rerun()
+
 st.divider()
 
 st.header("💼 Portföyüm")
 
+rows = []
+
 if "portfolio" not in st.session_state:
+    st.session_state.portfolio = load_portfolio()
 
-    if os.path.exists("portfolio.json"):
+if len(st.session_state.portfolio) == 0:
 
-        with open(
-            "portfolio.json",
-            "r",
-            encoding="utf-8"
-        ) as f:
+    st.info("""
+📭 Sepetinizde alınmış hisse bulunmuyor.
 
-            st.session_state.portfolio = json.load(f)
+Portföye hisse eklediğinizde burada görüntülenecek.
+""")
 
-    else:
-
-        st.session_state.portfolio = []
-
-    with open(
-        "portfolio.json",
-        "w",
-        encoding="utf-8"
-    ) as f:
-
-        json.dump(
-            st.session_state.portfolio,
-            f,
-            ensure_ascii=False,
-            indent=4
-        )
-
-    st.sidebar.success(
-        f"{selected_symbol} portföye eklendi"
-    )
-
-if len(st.session_state.portfolio) > 0:
+else:
 
     rows = []
+
+    alerts = []
+
+    kar_al_listesi = []
+    stop_listesi = []
+    kar_al_yaklasiyor_listesi = []
+
+    watchlist_results = []
 
     toplam_maliyet = 0
     toplam_guncel = 0
@@ -687,7 +531,8 @@ if len(st.session_state.portfolio) > 0:
 
             live = yf.download(
                 symbol,
-                period="5d",
+                period="1y",
+                auto_adjust=False,
                 progress=False
             )
 
@@ -706,6 +551,54 @@ if len(st.session_state.portfolio) > 0:
                 current_price = round(
                     float(son_fiyat),
                     2
+                )
+
+                ai_score = 50
+
+                volume = get_series(
+                    live,
+                    "Volume"
+                )
+
+                ema20 = EMAIndicator(
+                    close_series,
+                    20
+                ).ema_indicator()
+
+                ema50 = EMAIndicator(
+                    close_series,
+                    50
+                ).ema_indicator()
+
+                rsi = RSIIndicator(
+                    close_series,
+                    14
+                ).rsi()
+
+                last_rsi = float(
+                    rsi.iloc[-1]
+                )
+
+                if ema20.iloc[-1] > ema50.iloc[-1]:
+                    ai_score += 20
+
+                if 50 <= last_rsi <= 70:
+                    ai_score += 15
+
+                elif last_rsi > 70:
+                    ai_score += 5
+
+                elif last_rsi < 40:
+                    ai_score -= 10
+
+                avg_volume = volume.tail(20).mean()
+
+                if volume.iloc[-1] > avg_volume * 1.5:
+                    ai_score += 15
+
+                ai_score = max(
+                    0,
+                    min(ai_score, 100)
                 )
 
             else:
@@ -767,41 +660,176 @@ if len(st.session_state.portfolio) > 0:
 
                 kaybeden_sayisi += 1
 
+            # Alarm Sistemi
+
+            if kar_zarar_yuzde >= 15:
+
+                alarm = "🎯 KAR AL"
+
+                # kar_al_listesi.append(
+                #    f"{symbol} (%{kar_zarar_yuzde:.2f})"
+                # )
+
+            elif kar_zarar_yuzde <= -7:
+
+                alarm = "🛑 STOP"
+
+                # stop_listesi.append(
+                #    f"{symbol} (%{kar_zarar_yuzde:.2f})"
+                # )
+
+            else:
+
+                alarm = "🟢 TUT"
+
+
+            # Satış Karar Motoru V1
+
+            satis_puani = 50
+
+            # AI Bonus
+
+            if ai_score >= 90:
+                satis_puani += 20
+
+            elif ai_score >= 80:
+                satis_puani += 10
+
+            elif ai_score < 50:
+                satis_puani -= 10
+
+            ai_bonus = 0
+
+            if kar_zarar_yuzde > 0:
+                satis_puani += 10
+
+            if kar_zarar_yuzde > 1:
+                satis_puani += 5
+
+            if kar_zarar_yuzde > 2:
+                satis_puani += 5
+
+            if kar_zarar_yuzde > 3:
+                satis_puani += 10
+
+            if kar_zarar_yuzde < -1:
+                satis_puani -= 10
+
+            if kar_zarar_yuzde < -2:
+                satis_puani -= 20
+
+            kalan_potansiyel = round(
+                (
+                    (current_price * 1.15 - current_price)
+                    / current_price
+                ) * 100,
+                2
+            )
+
+            # if kalan_potansiyel >= 15:
+            #    satis_puani += 15
+            # 
+            # elif kalan_potansiyel >= 10:
+            #    satis_puani += 10
+            # 
+            # elif kalan_potansiyel >= 5:
+            #    satis_puani += 5
+          
+            if satis_puani >= 80:
+
+                satis_onerisi = "💰 KAR AL"
+
+            elif satis_puani >= 60:
+
+                satis_onerisi = "🟡 KAR AL YAKLAŞIYOR"
+
+            elif satis_puani <= 30:
+
+                satis_onerisi = "🔴 STOP"
+
+            else:
+
+                satis_onerisi = "🟢 TUT"
+
+           
+            if satis_onerisi == "💰 KAR AL":
+
+                kar_al_listesi.append(
+                    f"{symbol} | %{kar_zarar_yuzde:.2f}"
+                )
+
+            elif satis_onerisi == "🟡 KAR AL YAKLAŞIYOR":
+
+                kar_al_yaklasiyor_listesi.append(
+                    f"{symbol} | %{kar_zarar_yuzde:.2f}"
+                )
+
+            elif satis_onerisi == "🔴 STOP":
+
+                stop_listesi.append(
+                    f"{symbol} | %{kar_zarar_yuzde:.2f}"
+                )
+
+
             rows.append(
-    {
+                {
+                    "Hisse": symbol,
+                    "Lot": item["lot"],
+                    "Alış": item["alis"],
+                    "Güncel": current_price,
 
-        "Hisse": symbol,
-        "Lot": item["lot"],
-        "Alış": item["alis"],
-        "Güncel": current_price,
+                    "🚨 Alarm": alarm,
 
-        "K/Z %":
-            f"🟢 %{kar_zarar_yuzde:.2f}"
-            if kar_zarar_yuzde > 0
-            else (
-                f"🔴 %{kar_zarar_yuzde:.2f}"
-                if kar_zarar_yuzde < 0
-                else "⚪ %0.00"
-            ),
+                    "K/Z %":
+                        f"🟢 %{kar_zarar_yuzde:.2f}"
+                        if kar_zarar_yuzde > 0
+                        else (
+                            f"🔴 %{kar_zarar_yuzde:.2f}"
+                            if kar_zarar_yuzde < 0
+                            else "⚪ %0.00"
+                        ),
 
-        "Kâr TL": kar_tl_text,
+                    "Kâr TL": kar_tl_text,
 
-        "Toplam": round(
-            guncel_deger,
-            2
-        )
-    }
-)
+                    "Hedef Fiyat": round(
+                        current_price * 1.15,
+                        2
+                    ),
+
+                    "Kalan Potansiyel %": round(
+                        (
+                            (current_price * 1.15 - current_price)
+                            / current_price
+                        ) * 100,
+                        2
+                    ),
+
+                    "🎯 Satış Önerisi": satis_onerisi,
+
+                    "🧠 AI": ai_score,
+
+                    "🧠 Satış Puanı": satis_puani,
+
+                    "Toplam": round(
+                        guncel_deger,
+                        2
+                    )
+                }
+            )
 
         except Exception as e:
 
             st.error(
                 f"{symbol} HATA: {e}"
             )
-
         
     kar_tutar = round(
         toplam_guncel - toplam_maliyet,
+        2
+    )
+
+    portfoy_getiri = round(
+        (kar_tutar / toplam_maliyet) * 100,
         2
     )
 
@@ -825,10 +853,18 @@ if len(st.session_state.portfolio) > 0:
         f"{toplam_guncel:,.2f} TL"
     )
 
-    col3.metric(
-        "🚀 Kâr / Zarar",
-        f"{kar_tutar:,.2f} TL"
-    )
+    if kar_tutar >= 0:
+        col3.metric(
+            "🟢 Kâr",
+            f"{kar_tutar:,.2f} TL",
+            f"%{portfoy_getiri}"
+        )
+    else:
+        col3.metric(
+            "🔴 Zarar",
+            f"{kar_tutar:,.2f} TL",
+            f"%{portfoy_getiri}"
+        )
 
     col4, col5, col6 = st.columns(3)
 
@@ -848,21 +884,68 @@ if len(st.session_state.portfolio) > 0:
     )
 
     st.info(
-    f"""
-    🟢 Kazanan: {kazanan_sayisi}
+        f"""
+🟢 Kazanan: {kazanan_sayisi}
 
-    🔴 Kaybeden: {kaybeden_sayisi}
+🔴 Kaybeden: {kaybeden_sayisi}
 
-    📊 Toplam Pozisyon: {len(st.session_state.portfolio)}
-    """    
+📊 Toplam Pozisyon: {len(st.session_state.portfolio)}
+"""
     )
 
-    if len(rows) > 0:
+st.subheader("🚨 Satış Merkezi")
 
-        st.dataframe(
-            pd.DataFrame(rows),
-            use_container_width=True
-        )
+kar_al_listesi = []
+kar_al_yaklasiyor_listesi = []
+stop_listesi = []
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+
+    st.warning("🎯 Kar Al Adayları")
+
+    if len(kar_al_listesi) > 0:
+
+        for hisse in kar_al_listesi:
+            st.write(hisse)
+
+    else:
+
+        st.write("Şu an kar al seviyesine ulaşan hisse yok")
+
+with col3:
+
+    st.info("⚠️ Kar Al Yaklaşıyor")
+
+    if len(kar_al_yaklasiyor_listesi) > 0:
+
+        for hisse in kar_al_yaklasiyor_listesi:
+            st.write(hisse)
+
+    else:
+
+        st.write("Yaklaşan satış adayı yok")
+
+with col2:
+
+    st.error("🛑 Stop Adayları")
+
+    if len(stop_listesi) > 0:
+
+        for hisse in stop_listesi:
+            st.write(hisse)
+
+    else:
+
+        st.write("Şu an stop seviyesine ulaşan hisse yok")
+
+if len(st.session_state.portfolio) > 0 and len(rows) > 0:
+
+    st.dataframe(
+        pd.DataFrame(rows),
+        use_container_width=True
+    )
 
 st.markdown("### 🗑️ Portföyden Sil")
 
@@ -884,7 +967,7 @@ if st.button(
     ]
 
     with open(
-        "portfolio.json",
+        PORTFOLIO_FILE,
         "w",
         encoding="utf-8"
     ) as f:
@@ -950,7 +1033,7 @@ if show_backtest:
     try:
 
         df_backtest = pd.read_csv(
-            "backtest_history.csv"
+            BACKTEST_FILE
         )
 
         st.metric(
@@ -1157,14 +1240,6 @@ else:
     btc_price = 0
     btc_change = 0
 
-btc_change = round(
-    (
-        (btc_close.iloc[-1] /
-         btc_close.iloc[-2]) - 1
-    ) * 100,
-    2
-)
-
 col1, col2, col3, col4, col5, col6 = st.columns(6)
 
 col1.metric(
@@ -1231,14 +1306,31 @@ try:
     else:
         market_power = "🔴 ZAYIF"
 
+    # -------------------------
+    # Market Regime (AI)
+    # -------------------------
+
+    if bist_change >= 2:
+        market_regime = "STRONG_BULL"
+
+    elif bist_change >= 0.75:
+        market_regime = "BULL"
+
+    elif bist_change > -0.75:
+        market_regime = "NEUTRAL"
+
+    elif bist_change > -2:
+        market_regime = "BEAR"
+
+    else:
+        market_regime = "STRONG_BEAR"
+
     st.success(
         f"📈 BIST100: %{bist_change} | {market_power}"
     )
 
 except:
     pass
-
-st.title("📈 GainzAlgo V5 Professional")
 
 if show_watchlist:
 
@@ -1260,23 +1352,35 @@ if show_watchlist:
             )
 
             close = get_series(wdf, "Close")
+            
+            open_price = get_series(wdf, "Open")
 
             volume = get_series(wdf, "Volume")
 
             if len(close) < 20:
                 continue
-
             
             ema20 = EMAIndicator(close, 20).ema_indicator()
             ema50 = EMAIndicator(close, 50).ema_indicator()
 
             rsi = RSIIndicator(close, 14).rsi()
 
-            last_price = float(close.iloc[-1])
+            if pd.isna(wdf["Close"].iloc[-1].squeeze()):
+                last_price = float(wdf["Open"].iloc[-1].squeeze())
+            else:
+                last_price = float(close.iloc[-1])
+
+            print(hisse, "LAST PRICE =", last_price)
+            
             daily_change = (
                 (close.iloc[-1] / close.iloc[-2]) - 1
             ) * 100
+
             last_rsi = float(rsi.iloc[-1])
+
+            # Relative Strength (BIST Karşılaştırması)
+
+            rs_score = daily_change - bist_change
 
             ai_score = 0
 
@@ -1299,6 +1403,20 @@ if show_watchlist:
 
             if volume.iloc[-1] > avg_volume * 1.5:
                 ai_score += 25
+
+            # Relative Strength Bonus
+
+            if rs_score > 8:
+                ai_score += 30
+
+            elif rs_score > 5:
+                ai_score += 20
+
+            elif rs_score > 2:
+                ai_score += 10
+
+            elif rs_score < -2:
+                ai_score -= 15
 
             # Büyük Para Skoru
 
@@ -1333,7 +1451,7 @@ if show_watchlist:
 
             elif volume.iloc[-1] > avg_volume * 1.5:
                 big_money_score += 25
-
+            
             # Trend
             if ema20.iloc[-1] > ema50.iloc[-1]:
                 big_money_score += 20
@@ -1351,6 +1469,24 @@ if show_watchlist:
                 ai_score += 45
 
             ai_score = min(ai_score, 100)
+
+            # Hedefe Ulaşma Olasılığı
+
+            olasilik = 40
+
+            # AI Etkisi
+            olasilik += (ai_score - 50) * 0.40
+
+            # Para Etkisi
+            olasilik += (big_money_score - 40) * 0.20
+
+            # RS Etkisi
+            olasilik += rs_score * 2
+
+            olasilik = max(
+                5,
+                min(round(olasilik, 1), 95)
+            )
 
             if last_rsi < 30:
                 alerts.append(
@@ -1395,7 +1531,7 @@ if show_watchlist:
 
             else:
                 signal = "🔴 SAT"
-
+            
             # Son 50 günlük tepe
             target_price = round(
                 close.tail(50).max(),
@@ -1415,6 +1551,21 @@ if show_watchlist:
                     / last_price
                 ) * 100,
                 2
+            )            
+              
+            favori_skoru = round(
+                (
+                    ai_score * 0.5
+                )
+                +
+                (
+                    big_money_score * 0.3
+                )
+                +
+                (
+                    rs_score * 5
+                ),
+                1
             )
 
             watchlist_results.append(
@@ -1424,7 +1575,15 @@ if show_watchlist:
         "Günlük %": round(daily_change, 2),
         "RSI": round(last_rsi, 2),
 
+        "RS": round(rs_score, 2),
+
         "AI_SAYI": ai_score,
+
+        "PARA_SAYI": big_money_score,
+
+        "OLASILIK": olasilik,
+
+        "FAVORI_SKORU": favori_skoru,
 
         "AI Skor":
             f"🟢 {ai_score}"
@@ -1510,6 +1669,11 @@ if show_watchlist:
                 "Fiyat",
                 "Günlük %",
                 "RSI",
+                "RS",
+                "AI_SAYI",
+                "PARA_SAYI",
+                "OLASILIK",
+                "FAVORI_SKORU",
                 "AI Skor",
                 "Para Skoru",
                 "Sinyal",
@@ -1524,6 +1688,46 @@ if show_watchlist:
             watch_df,
             use_container_width=True
         )
+
+        st.subheader("🚀 Yarının Favorileri")
+
+        favoriler = watch_df[
+            (watch_df["AI_SAYI"] >= 80)
+            &
+            (watch_df["RS"] >= 2)
+            &
+            (watch_df["PARA_SAYI"] >= 60)
+            
+        ]
+
+        favoriler = favoriler.sort_values(
+            "FAVORI_SKORU",
+            ascending=False
+        )
+
+        if len(favoriler) > 0:
+        
+            st.dataframe(
+                favoriler[
+                    [
+                        "Hisse",
+                        "AI_SAYI",
+                        "PARA_SAYI",
+                        "RS",
+                        "OLASILIK",
+                        "FAVORI_SKORU",
+                        "AI Skor",
+                        "Sinyal"
+                    ]
+                ],
+                use_container_width=True
+            )
+
+        else:
+
+            st.info(
+                "Bugün güçlü favori bulunamadı."
+            )
 
     else:
 
@@ -1567,6 +1771,13 @@ for i, symbol in enumerate(BIST_LIST):
             continue
 
         df = all_data[symbol].copy()
+                      
+        if symbol == "EUPWR.IS":
+            st.write("RAW DF SON 5")
+            st.dataframe(df.tail())
+
+            st.write("CLOSE SON 5")
+            st.write(get_series(df, "Close").tail())
         
         if df.empty:
             continue
@@ -1580,19 +1791,9 @@ for i, symbol in enumerate(BIST_LIST):
         if len(close) < 200:
             continue
 
-        ema20 = EMAIndicator(close, 20).ema_indicator()
-        ema50 = EMAIndicator(close, 50).ema_indicator()
-        ema200 = EMAIndicator(close, 200).ema_indicator()
+        ema20, ema50, ema200 = calculate_emas(close)
 
-        if (
-            len(close) < 220
-            or len(ema20.dropna()) == 0
-            or len(ema50.dropna()) == 0
-            or len(ema200.dropna()) == 0
-        ):
-            continue
-
-        rsi = RSIIndicator(close, 14).rsi()
+        rsi = calculate_rsi(close)
 
         macd = MACD(close)
 
@@ -1600,8 +1801,8 @@ for i, symbol in enumerate(BIST_LIST):
         common_index = common_index.intersection(low.index)
 
         close = close.loc[common_index]
-        high  = high.loc[common_index]
-        low   = low.loc[common_index]
+        high = high.loc[common_index]
+        low = low.loc[common_index]
 
         atr = AverageTrueRange(
             high,
@@ -1610,27 +1811,25 @@ for i, symbol in enumerate(BIST_LIST):
         ).average_true_range()
         
         
-        score = 0
-
-        big_money_score = 0
-
-        early_warning = "—"
-        tomorrow_signal = "—"
-        future_score = 0
+        (
+            score,
+            big_money_score,
+            early_warning,
+            tomorrow_signal,
+            future_score,
+            dip_radar,
+        ) = initialize_signals()
        
-        if ema20.iloc[-1] > ema50.iloc[-1]:
-            score += 15
-               
-        if ema50.iloc[-1] > ema200.iloc[-1]:
-            score += 10
-
-        if close.iloc[-1] > ema200.iloc[-1]:
-            score += 10
+        score = calculate_trend_score(
+            ema20,
+            ema50,
+            ema200,
+            close,
+        )
 
         rsi_now = rsi.iloc[-1]
 
-        dip_radar = "—"
-
+        
         if (
             rsi_now > 45 and
             rsi_now < 60 and
@@ -1648,89 +1847,59 @@ for i, symbol in enumerate(BIST_LIST):
 
         # Erken Uyarı Sistemi
 
-        if rsi_now > 60 and rsi.iloc[-2] < 55:
-            early_warning = "🚀 Yeni Yükseliş"
+        early_warning = calculate_early_warning(rsi)
 
-        elif rsi_now < 45 and rsi.iloc[-2] > 50:
-            early_warning = "⚠️ Güç Kaybı"
-
-        if 55 <= rsi_now <= 70:
-            score += 15
-        elif 50 <= rsi_now < 55:
-            score += 10
-        elif 40 <= rsi_now < 50:
-            score += 5
+        score += calculate_rsi_score(rsi_now)
 
         macd_diff = macd.macd_diff().iloc[-1]
         macd_prev = macd.macd_diff().iloc[-2]
 
-        if macd_diff > 0:
-            score += 10
+        score += calculate_macd_score(
+            macd_diff,
+            macd_prev,
+        )
 
-        if macd_diff > macd_prev:
-            score += 5
         avg_volume = volume.tail(20).mean()
 
         volume_ratio = volume.tail(5).mean() / avg_volume
                
-        volume_ratio = volume.tail(5).mean() / avg_volume
-
+        
         # Büyük Para Skoru
 
-        avg_volume = volume.tail(20).mean()
+        big_money_score = calculate_big_money_score(
+            volume,
+            ema20,
+            ema50,
+            rsi_now,
+            close,
+        )
 
-        if volume.iloc[-1] > avg_volume * 2:
-            big_money_score += 40
+        future_score = calculate_future_score(
+            rsi_now,
+            rsi,
+            macd_diff,
+            macd_prev,
+            close,
+            ema20,
+            ema50,
+            volume_ratio,
+)
 
-        elif volume.iloc[-1] > avg_volume * 1.5:
-            big_money_score += 25
+        (
+            momentum20,
+            bist_momentum20,
+            relative_strength,
+            rs_text,
+        ) = calculate_relative_strength(
+            close,
+            bist_close,
+        )
 
-        if ema20.iloc[-1] > ema50.iloc[-1]:
-            big_money_score += 20
+        if momentum20 > 10:
+            future_score += 10
 
-        if 50 <= rsi_now <= 70:
-            big_money_score += 20
-
-        if close.iloc[-1] >= close.tail(20).max():
-            big_money_score += 20
-
-        # Yarın AL Skoru
-
-        future_score = 0
-
-        rsi_now = float(rsi.iloc[-1])
-
-        if rsi_now > rsi.iloc[-2]:
-            future_score += 25
-
-        if macd_diff > macd_prev:
-            future_score += 25
-
-        distance_ema20 = (
-            abs(close.iloc[-1] - ema20.iloc[-1])
-            / ema20.iloc[-1]
-        ) * 100
-
-        if distance_ema20 < 2:
-            future_score += 20
-
-        if volume_ratio > 1:
-            future_score += 15
-
-        if ema20.iloc[-1] > ema50.iloc[-1]:
-            future_score += 15
-
-        # Ana trend filtresi
-
-        if score < 50:
-            future_score -= 20
-
-        if score < 35:
-            future_score -= 20
-
-        future_score = min(future_score, 100)
-
-        future_score = max(0, future_score)
+        elif momentum20 > 5:
+            future_score += 5
 
         # Yarın AL Sinyali
 
@@ -1750,76 +1919,21 @@ for i, symbol in enumerate(BIST_LIST):
 
         else:
             tomorrow_signal = "—"
-          
 
-        if volume_ratio > 2:
-            whale_signal = "🐋 GÜÇLÜ KURUMSAL ALIM"
-
-        elif volume_ratio > 1.3:
-            whale_signal = "🟢 KURUMSAL İLGİ"
-
-        elif volume_ratio < 0.6:
-            whale_signal = "🔴 KURUMSAL SATIŞ"
-
-        else:
-            whale_signal = "⚪ NORMAL"
-
-        if volume.iloc[-1] > avg_volume * 2:
-            money_flow = "🔥 GÜÇLÜ"
-
-        elif volume.iloc[-1] > avg_volume * 1.3:
-            money_flow = "🟢 VAR"
-
-        elif volume.iloc[-1] > avg_volume:
-            money_flow = "🟡 ZAYIF"
-
-        else:
-            money_flow = "⚪ YOK"
+        whale_signal = calculate_whale_signal(
+            volume_ratio,
+        )          
+        
+        money_flow = calculate_money_flow(
+            volume,
+            avg_volume,
+        )
 
         if volume.iloc[-1] > avg_volume * 1.5:
             score += 15
         elif volume.iloc[-1] > avg_volume:
-            score += 8
-
-        momentum20 = (
-            (close.iloc[-1] / close.iloc[-20]) - 1
-        ) * 100
-
-        bist_momentum20 = (
-            (bist_close.iloc[-1] / bist_close.iloc[-20]) - 1
-        ) * 100
-
-        if momentum20 > 10:
-            future_score += 10
-
-        elif momentum20 > 5:
-            future_score += 5
-
-        relative_strength = (
-            momentum20 - bist_momentum20
-        )
-
-        if relative_strength > 10:
-            future_score += 10
-
-        elif relative_strength > 5:
-            future_score += 5
-
-        if relative_strength > 20:
-            rs_text = "🔥 ÇOK GÜÇLÜ"
-
-        elif relative_strength > 10:
-            rs_text = "🚀 GÜÇLÜ"
-
-        elif relative_strength > 0:
-            rs_text = "🟢 POZİTİF"
-
-        elif relative_strength > -10:
-            rs_text = "🟡 ZAYIF"
-
-        else:
-            rs_text = "🔴 ÇOK ZAYIF"
-
+            score += 8        
+        
         # RS Bonus
 
         if relative_strength > 20:
@@ -1836,15 +1950,24 @@ for i, symbol in enumerate(BIST_LIST):
 
         # Relative Strength
 
-        
-
         if momentum20 > 15:
             score += 10
         elif momentum20 > 7:
             score += 5
 
-        last_close = float(close.dropna().iloc[-1])
+        # Güncel fiyat seçimi
+
+        today_open = float(df["Open"].iloc[-1])
+
+        if pd.isna(df["Close"].iloc[-1]):
+            last_close = today_open
+        else:
+            last_close = float(df["Close"].iloc[-1])
+
         last_atr = float(atr.dropna().iloc[-1])
+
+        if last_close <= 0:
+            continue
 
         risk_ratio = (last_atr / last_close) * 100
 
@@ -1926,145 +2049,133 @@ for i, symbol in enumerate(BIST_LIST):
                 signal = "⛔ UZAK DUR"
                 action = "UZAK DUR"
 
-        financial_score = get_financial_score(symbol)
+        financial_score = calculate_financial_score(symbol)
 
         print("FINANCIAL SCORE:", symbol, financial_score)
 
-        # Sıralama Skoru
-
-        rank_score = (
-            score * 0.20 +
-            future_score * 0.15 +
-            financial_score * 0.75 +
-            relative_strength * 0.10 +
-            big_money_score * 0.10
+        rank_score = calculate_rank_score(
+            score=score,
+            future_score=future_score,
+            financial_score=financial_score,
+            relative_strength=relative_strength,
+            big_money_score=big_money_score,
+            risk_ratio=risk_ratio,
+            whale_signal=whale_signal,
+            money_flow=money_flow,
+            potential=potential,
+            dip_radar=dip_radar,
         )
 
-        # Risk cezası
-
-        rank_score -= risk_ratio * 1.2
-
-        # Büyük para bonusu
-
-        if big_money_score >= 80:
-            rank_score += 10
-
-        elif big_money_score >= 60:
-            rank_score += 5
-
-        # Kurumsal alım bonusu
-
-        if whale_signal == "🟢 KURUMSAL İLGİ":
-            rank_score += 5
-
-        elif whale_signal == "🐋 GÜÇLÜ KURUMSAL ALIM":
-            rank_score += 10
-
-        # Para girişi bonusu
-
-        if money_flow == "🔥 GÜÇLÜ":
-            rank_score += 5
-
-        elif money_flow == "🟢 VAR":
-            rank_score += 2
-
-        # Potansiyel ödülü
-
-        if potential > 20:
-            rank_score += 10
-
-        elif potential > 15:
-            rank_score += 7
-
-        elif potential > 10:
-            rank_score += 4
-
-        elif potential > 7:
-            rank_score += 2
-
-        # Negatif potansiyel cezası
-
-        if potential < 0:
-            rank_score -= 15
-
-        # Dip Radarı bonusu
-
-        if dip_radar == "🚀 YAKIN AL":
-            rank_score += 5
-
-        elif dip_radar == "👀 İZLE":
-            rank_score += 2
-
-        trend_power = 0
-
-        # Trend
-
-        if close.iloc[-1] > ema20.iloc[-1]:
-            trend_power += 20
-
-        if ema20.iloc[-1] > ema50.iloc[-1]:
-            trend_power += 20
-
-        # RSI
-
-        if rsi_now > 70:
-            trend_power += 20
-
-        elif rsi_now > 60:
-            trend_power += 12
-
-        elif rsi_now > 50:
-            trend_power += 6
-
-        # Relative Strength
-
-        if relative_strength > 20:
-            trend_power += 35
-
-        elif relative_strength > 10:
-            trend_power += 25
-
-        elif relative_strength > 0:
-            trend_power += 15
-
-        elif relative_strength > -10:
-            trend_power += 5
-
-        trend_power = min(trend_power, 100)
+        trend_power = calculate_trend_power(
+            close=close,
+            ema20=ema20,
+            ema50=ema50,
+            rsi_now=rsi_now,
+            relative_strength=relative_strength,
+        )
 
         # Hedefe Ulaşma Olasılığı
 
-        success_probability = (
-            score * 0.25 +
-            future_score * 0.25 +
-            financial_score * 0.15 +
-            big_money_score * 0.15 +
-            max(relative_strength, 0) * 0.10 +
-            trend_power * 0.10
+        success_probability = calculate_success_probability(
+            score=score,
+            future_score=future_score,
+            financial_score=financial_score,
+            big_money_score=big_money_score,
+            relative_strength=relative_strength,
+            trend_power=trend_power,
+            risk_ratio=risk_ratio,
+            potential=potential,
         )
 
-        success_probability -= risk_ratio * 3
-
-        if potential < 5:
-            success_probability -= 10
-
-        elif potential > 15:
-            success_probability += 5
-
-        success_probability = max(
-            5,
-            min(
-                round(success_probability, 2),
-                95
-            )
+        expected_return = calculate_expected_return(
+            potential=potential,
+            success_probability=success_probability,
         )
 
-        expected_return = round(
-            potential * success_probability / 100,
-            2
+        risk_adjusted_score = calculate_risk_adjusted_score(
+            future_score=future_score,
+            big_money_score=big_money_score,
+            relative_strength=relative_strength,
+            risk_ratio=risk_ratio,
         )
+
+        prefilter_pass = passes_ai_prefilter(
+            financial_score=financial_score,
+            trend_power=trend_power,
+            relative_strength=relative_strength,
+        )
+
+        learning_bonus = get_learning_bonus(symbol)
+
+        score += learning_bonus
+
+        decision = calculate_decision(
+            ai_score=score,
+            big_money_score=big_money_score,
+            probability=success_probability,
+            signal="NÖTR",
+            alerts=[],
+            target_price=target_price,
+
+            rank_score=score,
+            trend_power=trend_power,
+            success_probability=success_probability,
+            expected_return=expected_return,
+            risk_adjusted_score=risk_adjusted_score,
+            opportunity="NORMAL",
+            confidence="ORTA",
+        )
+
+        # =====================================================
+        # Dashboard Veri Paketi
+        # =====================================================
+
+        analysis_data = {
+            "symbol": symbol,
+            "decision": decision,
+            "score": score,
+            "future_score": future_score,
+            "financial_score": financial_score,
+            "big_money_score": big_money_score,
+            "trend_power": trend_power,
+            "success_probability": success_probability,
+            "expected_return": expected_return,
+            "risk_adjusted_score": risk_adjusted_score,
+            "target_price": target_price,
+        }
 
         print(symbol, financial_score)
+
+        # -------------------------
+        # AI Context
+        # -------------------------
+
+        ai_context = {
+
+            "symbol": symbol,
+
+            "ai_score": round(score, 2),
+
+            "financial_score": financial_score,
+
+            "trend_power": trend_power,
+
+            "learning_bonus": learning_bonus,
+
+        }
+        
+        ai_core = evaluate_stock(ai_context)
+
+        print("AI CORE:", ai_core)
+
+        # -------------------------
+        # AI Context Database
+        # -------------------------
+
+        if "ai_contexts" not in st.session_state:
+            st.session_state["ai_contexts"] = {}
+
+        st.session_state["ai_context"] = ai_context
 
         results.append({
             "Hisse": symbol,
@@ -2074,6 +2185,10 @@ for i, symbol in enumerate(BIST_LIST):
             "Erken Uyarı": early_warning,
             "Para Girişi": money_flow,
             "Karar": action,
+            "AI Güven": ai_core.confidence,
+            "AI PreFilter": "✅ PASS" if prefilter_pass else "❌ FAIL",
+            "AI Puanı": ai_core.score,
+            "AI Gerekçesi": " • ".join(ai_core.reasons),
             "AI Skor": round(score, 2),
             "Sinyal": signal,
             "RSI": round(rsi_now, 2),
@@ -2101,16 +2216,11 @@ for i, symbol in enumerate(BIST_LIST):
 
             "Beklenen Kazanç (%)": expected_return,
 
-            "Risk Ayarlı Skor": round(
-                min(
-                    100,
-                    (
-                        future_score * 0.45 +
-                        big_money_score * 0.35 +
-                        relative_strength * 0.20
-                    )
-                ) / max(float(risk_ratio), 1),
-                2
+            "Risk Ayarlı Skor": calculate_risk_adjusted_score(
+                future_score=future_score,
+                big_money_score=big_money_score,
+                relative_strength=relative_strength,
+                risk_ratio=risk_ratio,
             ),
 
             "Risk %": round(float(risk_ratio), 2),
@@ -2131,7 +2241,7 @@ for i, symbol in enumerate(BIST_LIST):
         ),
             "Sıra Skoru": round(rank_score, 2),
             })
-
+            
     except Exception as e:
         import traceback
 
@@ -2144,6 +2254,61 @@ for i, symbol in enumerate(BIST_LIST):
     progress.progress((i + 1) / len(BIST_LIST))
 
 result_df = pd.DataFrame(results)
+
+# -------------------------
+# Global Analysis Data
+# -------------------------
+
+set_result_df(result_df)
+
+(
+    top10_df,
+    tomorrow_df,
+    near_buy_df,
+    dip_df,
+) = prepare_scanner_lists(result_df)
+
+dashboard_data = prepare_dashboard_data(result_df)
+
+st.session_state["top10_df"] = top10_df
+st.session_state["tomorrow_df"] = tomorrow_df
+st.session_state["near_buy_df"] = near_buy_df
+st.session_state["dip_df"] = dip_df
+
+dashboard_data = prepare_dashboard_data(result_df)
+
+# =====================================================
+# Dashboard
+# =====================================================
+
+if page == "🏠 Dashboard":
+
+    show_dashboard(
+        dashboard_data=dashboard_data,
+        selected_symbol=selected_symbol,
+    )
+
+# =====================================================
+# HİSSE ANALİZİ
+# =====================================================
+
+if page == "📈 Hisse Analizi":
+    
+    show_stock_analysis_page(
+        selected_symbol,
+        result_df,
+    )
+
+    
+# =====================================================
+# BACKTEST
+# =====================================================
+
+if page == PAGE_BACKTEST:
+
+    
+    show_backtest_page()
+
 
 top5_df = (
     result_df
@@ -2168,7 +2333,7 @@ favorite = result_df_favorite.iloc[0]
 
 today = pd.Timestamp.today().strftime("%Y-%m-%d")
 
-if not os.path.exists("favorite_history.csv"):
+if not os.path.exists(FAVORITE_FILE):
     pd.DataFrame(columns=[
         "Tarih",
         "Hisse",
@@ -2176,13 +2341,138 @@ if not os.path.exists("favorite_history.csv"):
         "Beklenen Kazanç (%)",
         "Hedefe Ulaşma Olasılığı (%)",
         "AI Skor",
-        "Yarın Skor"
+        "Yarın Skor",
+        "Decision Score",
+        "Confidence",
+        "Trend Power",
+        "AI PreFilter",
+        "Market Regime",
+        "Ertesi Gün Fiyat",
+        "Gerçek Getiri (%)",
+        "Başarılı"
     ]).to_csv(
-        "favorite_history.csv",
+        FAVORITE_FILE,
         index=False
     )
 
-history_df = pd.read_csv("favorite_history.csv")
+history_df = pd.read_csv(FAVORITE_FILE)
+
+history_df["Başarılı"] = history_df["Başarılı"].astype("object")
+
+for idx, row in history_df.iterrows():
+
+    if pd.isna(row["Ertesi Gün Fiyat"]):
+
+        try:
+
+            hisse = row["Hisse"]
+
+            data = yf.download(
+                hisse,
+                period="5d",
+                progress=False,
+                auto_adjust=False
+            )
+
+            if len(data) >= 2:
+
+                close_series = get_series(
+                    data,
+                    "Close"
+                ).dropna()
+
+                if len(close_series) > 0:
+
+                    ertesi_fiyat = float(
+                        close_series.iloc[-1]
+                    )
+
+                    history_df.loc[
+                        idx,
+                        "Ertesi Gün Fiyat"
+                    ] = round(
+                        ertesi_fiyat,
+                        2
+                    )
+
+        except Exception as e:
+            st.error(f"HATA: {e}")
+
+history_df.to_csv(
+    FAVORITE_FILE,
+    index=False,
+    encoding="utf-8-sig"
+)
+
+# Geçmiş favorileri güncelle
+
+for idx, row in history_df.iterrows():
+
+    if pd.isna(row["Gerçek Getiri (%)"]):
+
+        try:
+
+            data = yf.download(
+                row["Hisse"],
+                period="5d",
+                progress=False
+            )
+
+            if len(data) >= 2:
+
+                close_series = get_series(
+                    data,
+                    "Close"
+                ).dropna()
+
+                if len(close_series) > 0:
+
+                    next_price = float(
+                        close_series.iloc[-1]
+                    )
+
+                    entry_price = float(
+                        row["Fiyat"]
+                    )
+
+                    real_return = round(
+                        (
+                            (next_price - entry_price)
+                            / entry_price
+                        ) * 100,
+                        2
+                    )
+
+                    history_df.at[
+                        idx,
+                        "Ertesi Gün Fiyat"
+                    ] = next_price
+
+                    history_df.at[
+                        idx,
+                        "Gerçek Getiri (%)"
+                    ] = real_return
+
+                    history_df.at[
+                        idx,
+                        "Başarılı"
+                    ] = (
+                        1
+                        if real_return > 0
+                        else 0
+                    )
+
+        except Exception as e:
+            import traceback
+            st.text(traceback.format_exc())
+            st.error(f"GETIRI HATASI: {e}")                          
+
+                
+history_df.to_csv(
+    FAVORITE_FILE,
+    index=False,
+    encoding="utf-8-sig"
+)
 
 if (
     history_df.empty
@@ -2200,7 +2490,26 @@ if (
         "AI Skor":
             favorite["AI Skor"],
         "Yarın Skor":
-            favorite["Yarın Skor"]
+            favorite["Yarın Skor"],
+
+        "Decision Score":
+            favorite["AI Puanı"],
+
+        "Confidence":
+            favorite["AI Güven"],
+
+        "Trend Power":
+            favorite["Trend Gücü"],
+
+        "AI PreFilter":
+            favorite["AI PreFilter"],
+
+        "Market Regime":
+            market_regime,
+
+        "Ertesi Gün Fiyat": None,
+        "Gerçek Getiri (%)": None,
+        "Başarılı": None
     }])
 
     history_df = pd.concat(
@@ -2209,7 +2518,7 @@ if (
     )
 
     history_df.to_csv(
-        "favorite_history.csv",
+        FAVORITE_FILE,
         index=False,
         encoding="utf-8-sig"
     )
@@ -2239,26 +2548,179 @@ st.success(
 """
 )
 
-st.subheader("📊 Favori Geçmişi")
+st.subheader("📊 Favori Performans Takibi")
 
-history_df = pd.read_csv("favorite_history.csv")
+history_df = pd.read_csv(FAVORITE_FILE)
 
-col1, col2 = st.columns(2)
+history_df = update_accuracy_history(history_df)
+
+# ---------------------------------
+# Güncellenmesi gereken kayıtlar
+# ---------------------------------
+
+pending_rows = history_df[
+    history_df["Ertesi Gün Fiyat"].isna()
+]
+
+for index, row in pending_rows.iterrows():
+
+    symbol = row["Hisse"]
+
+    try:
+
+        df = yf.download(
+            symbol,
+            period="5d",
+            progress=False,
+            auto_adjust=True,
+        )
+
+        if df.empty:
+            continue
+
+        print(symbol, "fiyat alındı")
+
+        next_price = float(df["Close"].iloc[-1])
+
+        history_df.loc[
+            index,
+            "Ertesi Gün Fiyat"
+        ] = next_price
+
+        print("Son Fiyat:", next_price)
+
+    except Exception:
+        continue
+
+# ---------------------------------
+# Bekleyen kayıt sayısı
+# ---------------------------------
+
+pending_count = len(pending_rows)
+
+# ---------------------------------
+# AI Accuracy
+# ---------------------------------
+
+completed_predictions = history_df[
+    history_df["Başarılı"].notna()
+]
+
+total_predictions = len(completed_predictions)
+
+successful_predictions = (
+    completed_predictions["Başarılı"] == 1
+).sum()
+
+if total_predictions > 0:
+    accuracy = round(
+        successful_predictions /
+        total_predictions * 100,
+        2
+    )
+else:
+    accuracy = 0
+
+history_df = history_df.fillna("-")
+
+col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     st.metric(
-        "Toplam Favori",
+        "📌 Toplam Favori",
         len(history_df)
     )
 
 with col2:
     st.metric(
-        "Ort. Beklenen Kazanç (%)",
-        round(
-            history_df["Beklenen Kazanç (%)"].mean(),
-            2
-        )
+        "🎯 AI Accuracy",
+        f"%{accuracy:.2f}"
     )
+
+with col3:
+    st.metric(
+        "🏆 En Yüksek Beklenen Kazanç",
+        f"%{history_df['Beklenen Kazanç (%)'].max():.2f}"
+    )
+
+with col4:
+    st.metric(
+        "⏳ Bekleyen Güncelleme",
+        pending_count
+    )
+
+basarili_sayisi = (
+    pd.to_numeric(
+        history_df["Başarılı"],
+        errors="coerce"
+    )
+    .fillna(0)
+    .sum()
+)
+
+basarisiz_sayisi = (
+    len(history_df)
+    - basarili_sayisi
+)
+
+toplam_sonuc = (
+    basarili_sayisi +
+    basarisiz_sayisi
+)
+
+if toplam_sonuc > 0:
+
+    basari_orani = round(
+        basarili_sayisi
+        / toplam_sonuc
+        * 100,
+        1
+    )
+
+else:
+
+    basari_orani = 0
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.metric(
+        "✅ Başarılı",
+        basarili_sayisi
+    )
+
+with col2:
+    st.metric(
+        "❌ Başarısız",
+        basarisiz_sayisi
+    )
+
+with col3:
+    st.metric(
+        "🎯 Başarı Oranı",
+        f"%{basari_orani}"
+    )
+        
+    ortalama_getiri = pd.to_numeric(
+        history_df["Gerçek Getiri (%)"],
+        errors="coerce"
+    ).mean()
+
+    if pd.isna(ortalama_getiri):
+
+        ortalama_getiri = 0
+
+    ortalama_getiri = round(
+        ortalama_getiri,
+        2
+)
+
+st.metric(
+    "📈 Ort. Gerçek Getiri",
+    f"%{ortalama_getiri}"
+)
+
+st.write("### Son Favoriler")
 
 st.dataframe(
     history_df.tail(10),
@@ -2321,10 +2783,14 @@ with col4:
 
 st.divider()
 
+if page == "🔍 AI Tarayıcı":
+        
+    if not result_df.empty:
 
-if not result_df.empty:
+        st.subheader("🔍 AI Tarama Sonuçları")
+        st.divider()
 
-    st.header("🏆 BUGÜNÜN EN GÜÇLÜ 10 HİSSESİ")
+        st.subheader("🏆 Bugünün En Güçlü 10 Hissesi")
 
     top10 = (
         result_df
@@ -2340,7 +2806,7 @@ if not result_df.empty:
 
     try:
 
-        backtest_file = "backtest_history.csv"
+        backtest_file = BACKTEST_FILE
 
         save_df = top10.copy()
         
@@ -2380,6 +2846,7 @@ if not result_df.empty:
             ):
                 save_today = False
 
+
         if save_today:
 
             if os.path.exists(backtest_file):
@@ -2405,48 +2872,43 @@ if not result_df.empty:
         )
 
     st.dataframe(
-    top10[
-        [
-            "Hisse",
-            "AI Skor",
-            "Karar",
-            "Potansiyel %",
-            "Risk %",
-            "Güven Notu",
-            "Sıra Skoru"
-        ]
-    ],
-    use_container_width=True
-)
-st.header("🏆 Yarının En Güçlü 5 Hissesi")
+        top10[
+            [
+                "Hisse",
+                "AI Skor",
+                "Karar",
+                "Potansiyel %",
+                "Risk %",
+                "Güven Notu",
+                "Sıra Skoru",
+            ]
+        ],
+        use_container_width=True,
+    )
 
-top5_show = top5_df[
-    [
-        "Hisse",
-        "Karar",
-        "Sıra Skoru",
-        "Yarın AL",
-        "Hedef",
-        "Potansiyel %",
-        "Risk %"
-    ]
-]
+    st.subheader("🔮 Yarının En Güçlü 5 Hissesi")
 
-st.dataframe(
-    top5_show,
-    use_container_width=True
-)
+    st.divider()
 
-st.divider()
+    top5_show = prepare_tomorrow_table(top5_df)
 
-st.subheader("🏅 Günün En Güçlü Hisseleri")
+    st.dataframe(
+        top5_show,
+        use_container_width=True
+    )
 
-st.dataframe(
-    result_df,
-    use_container_width=True
-)
+    st.divider()
 
-st.subheader("🚨 Yaklaşan AL Sinyalleri")
+    st.subheader("🏅 Günün En Güçlü Hisseleri")
+
+    st.dataframe(
+        result_df,
+        use_container_width=True
+    )
+
+    st.divider()
+
+    st.subheader("🚨 Yaklaşan AL Sinyalleri")
 
 dip_df = result_df[
     result_df["Dip Radarı"] == "🚀 YAKIN AL"
@@ -2484,6 +2946,7 @@ else:
         "Şu anda yaklaşan güçlü AL sinyali yok."
     )
 
+st.divider()
 st.subheader("🔮 Yarın AL Verebilecek Hisseler")
 
 future_df = result_df[
@@ -2507,6 +2970,121 @@ else:
     st.info(
         "Şu an güçlü aday bulunamadı."
     )
+# =========================
+# BACKTEST PERFORMANSI
+# =========================
+
+st.subheader("📊 Sistem Performansı")
+
+try:
+
+    bt = pd.read_csv(
+        BACKTEST_FILE
+    )
+
+    bt["Gerçek Getiri %"] = pd.to_numeric(
+        bt["Gerçek Getiri %"],
+        errors="coerce"
+    )
+
+    bt = bt.dropna(
+        subset=["Gerçek Getiri %"]
+    )
+
+    toplam = len(
+        bt[
+            bt["Gerçek Getiri %"].notna()
+        ]
+    )
+
+    st.write(
+        bt[
+            ["Hisse", "Gerçek Getiri %"]
+        ].tail(20)
+    )
+
+    kazanan = len(
+        bt[
+            bt["Gerçek Getiri %"] > 0
+        ]
+    )
+
+    kaybeden = len(
+        bt[
+            bt["Gerçek Getiri %"] < 0
+        ]
+    )
+
+    basari = round(
+        (kazanan / toplam) * 100,
+        1
+    ) if toplam > 0 else 0
+
+    ortalama_getiri = round(
+        bt["Gerçek Getiri %"].mean(),
+        2
+    ) if toplam > 0 else 0
+
+    en_iyi_getiri = round(
+        bt["Gerçek Getiri %"].max(),
+        2
+    ) if toplam > 0 else 0
+
+    en_kotu_getiri = round(
+        bt["Gerçek Getiri %"].min(),
+        2
+    ) if toplam > 0 else 0
+
+    kumulatif_getiri = round(
+        bt["Gerçek Getiri %"].sum(),
+        2
+    ) if toplam > 0 else 0
+
+    c1, c2, c3 = st.columns(3)
+    c4, c5, c6 = st.columns(3)
+
+    c1.metric(
+        "Toplam Sinyal",
+        toplam
+    )
+
+    c2.metric(
+        "Kazanan",
+        kazanan
+    )
+
+    c3.metric(
+        "Başarı %",
+        basari
+    )
+
+    c4.metric(
+        "Ort. Getiri %",
+        ortalama_getiri
+    )
+
+    c5.metric(
+        "🏆 En İyi İşlem",
+        f"%{en_iyi_getiri}"
+    )
+
+    c6.metric(
+        "📉 En Kötü İşlem",
+        f"%{en_kotu_getiri}"
+    )
+
+    st.metric(
+        "💰 Kümülatif Getiri",
+        f"%{kumulatif_getiri}"
+    )
+
+except Exception as e:
+
+    st.warning(
+        f"Backtest verisi okunamadı: {e}"
+    )
+
+st.divider()
 
 st.subheader("📢 KAP Radar")
 
@@ -2550,6 +3128,8 @@ st.table(
     result_df.head(10)
 )
 
+st.stop()
+
 st.divider()
 
 st.markdown("---")
@@ -2569,7 +3149,25 @@ df = yf.download(
     progress=False
 )
 
+ticker = yf.Ticker(selected_symbol)
+
+try:
+    st.write("ANLIK FİYAT")
+    st.write(ticker.fast_info["lastPrice"])
+except:
+    pass
+
 close = get_series(df, "Close")
+
+st.write("ANALIZ CLOSE SON DEĞER")
+st.write(close.tail())
+
+st.write("DF SON TARİH")
+st.write(df.index[-1])
+
+st.write("TOPLAM SATIR")
+st.write(len(df))
+
 high = get_series(df, "High")
 low = get_series(df, "Low")
 
@@ -2594,7 +3192,11 @@ atr = AverageTrueRange(
     close
 ).average_true_range()
 
-last_close = float(close.dropna().iloc[-1])
+last_close = alis
+
+st.write("ANALIZ FIYATI =", last_close)
+
+st.write("LAST_CLOSE =", last_close)
 
 risk_ratio = (
     float(atr.dropna().iloc[-1]) /
@@ -2804,10 +3406,20 @@ fig.update_layout(
     height=650
 )
 
-st.plotly_chart(
-    fig,
-    use_container_width=True
-)
+left_col, right_col = st.columns([3, 1])
+
+with left_col:
+
+    st.plotly_chart(
+        fig,
+        use_container_width=True
+    )
+
+with right_col:
+
+    show_ai_panel(
+        st.session_state["dashboard_data"]
+    )
 
 detail_volume = get_series(df, "Volume")
 
